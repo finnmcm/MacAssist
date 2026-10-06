@@ -159,6 +159,24 @@ prompt-injection-prone free text):
 (model downloading, Apple Intelligence off), Stage A results stand alone and the panel
 shows a subtle "basic search" indicator — the app degrades, never breaks.
 
+**Stage trigger (decided 2026-10-06, refines the two-stage design above):** Stage A
+(FTS) runs live on every keystroke; **Stage B (AFM + embeddings) is deferred to Enter**,
+not run automatically in parallel on each query. The panel stays pure-FTS and instant
+while typing, and the expensive on-device LLM only engages when the user commits — saving
+battery/compute and keeping typing latency flat. Enter is therefore both "show full
+results" and the point where Stage B runs.
+
+**Query caching (decided 2026-10-06):** cache `query → SearchIntent`, keyed by normalized
+(lower-cased, trimmed) query text, in a small LRU. `SearchIntent` is the *expensive* part
+(the AFM call) and is a pure function of the query string — independent of the file index
+— so it is safe to cache indefinitely; a repeat query skips the LLM entirely. Do **not**
+durably cache final hit lists: the sweeper mutates the index continuously, so cached hits
+go stale. Always recompute retrieval (FTS ∪ vector KNN → fusion) fresh against the live
+index using the cached intent. The symlink *result folder* is a disposable output (only
+the current search's folder is kept), never a cache — rebuilding it from a hit list is
+sub-millisecond, so retaining old folders buys nothing without a deliberate
+"recent searches" feature.
+
 ---
 
 ## 5. Sweep subsystem

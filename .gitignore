@@ -2,3 +2,6 @@ build/
 .cache/
 .DS_Store
 compile_commands.json
+
+# SwiftPM build products for the UI app
+app/.build/
