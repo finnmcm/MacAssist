@@ -1,10 +1,15 @@
 import Foundation
 
-// Materializes a set of search hits as a folder of symlinks, so the user
-// can browse every relevant file at once in a real Finder window. Each
-// search gets its own fresh folder (hence a new window); previous folders
-// are cleared on each new search — they're disposable outputs the app never
+// Materializes a set of search hits as a folder of links, so the user can
+// browse every relevant file at once in a real Finder window. Each search
+// gets its own fresh folder (hence a new window); previous folders are
+// cleared on each new search — they're disposable outputs the app never
 // reads back, so retaining history would be clutter, not a feature.
+//
+// Links are hard links where possible: Finder renders a real QuickLook
+// thumbnail for a hard link (it's indistinguishable from the original file),
+// but only a generic type icon for a symlink. Hard links can't cross volumes
+// or point at package/directory bundles, so those fall back to symlinks.
 enum ResultsFolder {
     enum FolderError: Error, CustomStringConvertible {
         case noHits
@@ -33,12 +38,15 @@ enum ResultsFolder {
 
         var used = Set<String>()
         for hit in hits {
-            let target = URL(fileURLWithPath: hit.path)
             let linkName = uniqueName(hit.name, used: &used)
-            let link = dir.appendingPathComponent(linkName)
-            // Best-effort per link: a missing/renamed target shouldn't sink
-            // the whole folder.
-            try? fm.createSymbolicLink(at: link, withDestinationURL: target)
+            let linkPath = dir.appendingPathComponent(linkName).path
+            // Prefer a hard link (Finder shows a real thumbnail); fall back
+            // to a symlink when a hard link is impossible — cross-volume
+            // targets, package/directory bundles, or a missing target. All
+            // best-effort: one bad target shouldn't sink the whole folder.
+            if link(hit.path, linkPath) != 0 {
+                try? fm.createSymbolicLink(atPath: linkPath, withDestinationPath: hit.path)
+            }
         }
         return dir
     }

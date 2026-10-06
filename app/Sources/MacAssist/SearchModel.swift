@@ -13,6 +13,10 @@ final class SearchModel: ObservableObject {
     @Published var selection: Int = 0
     @Published var status: String = ""
 
+    // Called after an action that should close the panel (open file / show
+    // all). Wired by PanelController; keeps the view free of window logic.
+    var onDismiss: (() -> Void)?
+
     private let client: DaemonClient
     private var requestID = 0
     private var latestDispatched = 0
@@ -76,9 +80,16 @@ final class SearchModel: ObservableObject {
         selection = max(0, min(results.count - 1, selection + delta))
     }
 
-    // Enter: gather every hit into a fresh folder of symlinks and open it
-    // in a new Finder window, so the user can browse all relevant files at
-    // once rather than committing to a single guess.
+    // Enter: reveal the selected (default top) hit in Finder — jump to its
+    // real location and highlight it there, rather than opening it.
+    func revealSelected() {
+        guard results.indices.contains(selection) else { return }
+        reveal(results[selection])
+    }
+
+    // ⌘Enter / "Show all" footer: gather every hit into a fresh folder of
+    // links and open it in a new Finder window, so the user can browse all
+    // relevant files at once rather than committing to a single guess.
     func openResults() {
         guard !results.isEmpty else { return }
         do {
@@ -86,13 +97,19 @@ final class SearchModel: ObservableObject {
             NSWorkspace.shared.open(dir)
         } catch {
             status = "Couldn't open results (\(error))"
+            return  // leave the panel up so the message is visible
         }
+        onDismiss?()
     }
 
-    func open(_ hit: FileHit) {
-        NSWorkspace.shared.open(URL(fileURLWithPath: hit.path))
+    func reveal(_ hit: FileHit) {
+        NSWorkspace.shared.activateFileViewerSelecting(
+            [URL(fileURLWithPath: hit.path)])
+        onDismiss?()
     }
 
+    // ⌘C: copy the selected path. Deliberately does not dismiss — copying is
+    // often a prelude to another action in the same session.
     func copySelectedPath() {
         guard results.indices.contains(selection) else { return }
         NSPasteboard.general.clearContents()

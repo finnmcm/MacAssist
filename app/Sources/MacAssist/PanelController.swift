@@ -1,14 +1,22 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // A non-activating floating panel (PLAN.md section 7): centered, blurred,
 // escape to dismiss, focus returns to the previous app on close. Hosts the
-// SwiftUI SearchView and owns the keyboard navigation monitor.
+// SwiftUI SearchView, owns the keyboard navigation monitor, and grows the
+// window to fit the results (anchored at its top edge).
 @MainActor
 final class PanelController {
     private let panel: KeyablePanel
     private let model: SearchModel
     private var keyMonitor: Any?
+    private var cancellables = Set<AnyCancellable>()
+
+    // Screen position of the panel's top-left while shown. Fixed on show so
+    // the window grows downward as results arrive instead of drifting.
+    private var anchorX: CGFloat = 0
+    private var anchorTop: CGFloat = 0
 
     init(model: SearchModel) {
         self.model = model
@@ -22,7 +30,7 @@ final class PanelController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false  // keep the top-edge anchor stable
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .utilityWindow
@@ -46,6 +54,21 @@ final class PanelController {
             host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
         ])
         panel.contentView = blur
+
+        // Actions that open something close the panel.
+        model.onDismiss = { [weak self] in self?.hide() }
+
+        // Grow/shrink the window to fit the results as they change, keeping
+        // the top edge anchored. Deferred to the next run loop so the model's
+        // @Published values have settled.
+        Publishers.CombineLatest(model.$results, model.$status)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] results, status in
+                guard let self, self.panel.isVisible else { return }
+                self.applyHeight(PanelMetrics.totalHeight(
+                    rowCount: results.count, hasStatus: !status.isEmpty))
+            }
+            .store(in: &cancellables)
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -56,8 +79,13 @@ final class PanelController {
 
     func show() {
         model.reset()
-        panel.layoutIfNeeded()
-        center()
+        if let screen = NSScreen.main {
+            let visible = screen.visibleFrame
+            anchorX = visible.midX - PanelMetrics.width / 2
+            // Top edge a little above center, Spotlight-style.
+            anchorTop = visible.midY + visible.height * 0.18
+        }
+        applyHeight(PanelMetrics.totalHeight(rowCount: 0, hasStatus: false))
         installKeyMonitor()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -68,14 +96,11 @@ final class PanelController {
         panel.orderOut(nil)
     }
 
-    private func center() {
-        guard let screen = NSScreen.main else { return }
-        let frame = panel.frame
-        let visible = screen.visibleFrame
-        let x = visible.midX - frame.width / 2
-        // Sit a little above vertical center, Spotlight-style.
-        let y = visible.midY + visible.height * 0.12 - frame.height / 2
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+    // Resize to `height`, keeping the top-left corner pinned at the anchor.
+    private func applyHeight(_ height: CGFloat) {
+        let frame = NSRect(x: anchorX, y: anchorTop - height,
+                           width: PanelMetrics.width, height: height)
+        panel.setFrame(frame, display: true, animate: false)
     }
 
     // MARK: - keyboard
@@ -109,10 +134,13 @@ final class PanelController {
         case 126:  // up arrow
             model.moveSelection(-1)
             return true
-        case 36, 76:  // return / keypad enter — open all hits in a Finder window
-            model.openResults()
-            hide()
-            return true
+        case 36, 76:  // return / keypad enter
+            if cmd {
+                model.openResults()     // ⌘Enter: show all hits in Finder
+            } else {
+                model.revealSelected()  // Enter: reveal the selected file in place
+            }
+            return true  // the model dismisses on success
         case 8 where cmd:  // ⌘C — copy selected path
             model.copySelectedPath()
             return true

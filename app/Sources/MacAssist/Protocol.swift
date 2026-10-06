@@ -27,6 +27,7 @@ struct QueryRequest: Encodable {
     let type = "query"
     let text: String
     let stage: String  // "instant" | "full"
+    let limit = 50     // daemon defaults to 5 if omitted; we want the full set
 }
 
 // One result row from a `results` response.
