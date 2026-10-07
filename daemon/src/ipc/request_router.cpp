@@ -5,6 +5,7 @@
 #include "index/database.hpp"
 #include "macassist/protocol.hpp"
 #include "query/query_engine.hpp"
+#include "sweep/sweep_status.hpp"
 
 namespace macassist {
 
@@ -46,7 +47,8 @@ std::string RequestRouter::Handle(const std::string& request_json) {
                 {"type", msg::kStatus},
                 {"id", id},
                 {"indexedFiles", db_.CountFiles()},
-                {"sweeping", false},
+                {"sweeping", status_.sweeping.load()},
+                {"scanned", status_.scanned.load()},
                 {"afmAvailable", false}}
         .dump();
   }

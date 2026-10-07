@@ -185,8 +185,10 @@ sub-millisecond, so retaining old folders buys nothing without a deliberate
 WAL*, never by an application-level lock over the database:
 
 - **Single writer, connection-per-role.** Exactly one *writer* thread owns the write
-  connection and is the only thread that writes; it services one **write-command queue**
-  (metadata upsert, apply-extraction, tombstone, purge). The IPC query handler uses its own
+  connection and is the only thread that writes. Full crawls and reconciliation run as batch
+  jobs **directly on this thread** (one big transaction, no per-file hand-off); mutations
+  from threads that *can't* touch the DB (the FSEvents watcher, the extraction workers)
+  arrive via a **write-command queue** the same thread drains. The IPC query handler uses its own
   *read-only* connection. WAL (already enabled) lets readers run against the last committed
   snapshot *concurrently* with an in-flight write and serializes writers internally — so an
   extraction batch never blocks a query. A `std::shared_mutex` over the DB is explicitly

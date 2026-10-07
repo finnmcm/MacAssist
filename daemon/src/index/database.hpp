@@ -48,7 +48,7 @@ class Database {
   // Runs one or more semicolon-separated statements with no results.
   bool Exec(const std::string& sql, std::string* err);
 
-  // Row count of the files table (0 on error).
+  // Count of present (non-tombstoned) files (0 on error).
   long long CountFiles();
 
  private:

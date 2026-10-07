@@ -7,6 +7,7 @@ add_executable(macassistd
   src/index/database.cpp
   src/index/file_kind.cpp
   src/sweep/crawler.cpp
+  src/sweep/writer.cpp
   src/query/query_engine.cpp)
 
 # Allows includes like "ipc/socket_server.hpp" and "index/database.hpp".

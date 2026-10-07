@@ -6,7 +6,7 @@
 namespace macassist {
 namespace {
 
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 
 // Reads meta.schema_version; returns 0 if the meta table or row is absent
 // (e.g. a brand-new database), which forces a rebuild to the current schema.
@@ -98,7 +98,7 @@ bool Database::Exec(const std::string& sql, std::string* err) {
 
 long long Database::CountFiles() {
   std::string err;
-  Stmt s(db_, "SELECT count(*) FROM files", &err);
+  Stmt s(db_, "SELECT count(*) FROM files WHERE missing=0", &err);
   if (!s) return 0;
   return (sqlite3_step(s.get()) == SQLITE_ROW)
              ? sqlite3_column_int64(s.get(), 0)
@@ -140,7 +140,8 @@ bool Database::Migrate(std::string* err) {
       ext TEXT, kind TEXT, size INTEGER,
       created_at INTEGER, modified_at INTEGER, indexed_at INTEGER,
       fingerprint TEXT,
-      missing INTEGER NOT NULL DEFAULT 0);
+      missing INTEGER NOT NULL DEFAULT 0,
+      seen_gen INTEGER NOT NULL DEFAULT 0);
     CREATE VIRTUAL TABLE file_text USING fts5(
       name, path_tokens, content, tags, tokenize='unicode61');
     COMMIT;

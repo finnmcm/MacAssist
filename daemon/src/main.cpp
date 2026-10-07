@@ -8,7 +8,7 @@
 #include "ipc/request_router.hpp"
 #include "ipc/socket_server.hpp"
 #include "macassist/protocol.hpp"
-#include "sweep/crawler.hpp"
+#include "sweep/writer.hpp"
 
 namespace {
 
@@ -63,26 +63,19 @@ int main(int argc, char** argv) {
   }
 
   std::string err;
-  // Writer connection: owns every mutation (the crawl here; the background
-  // sweeper in a later brick). Opening it runs the schema migration.
-  auto wdb = macassist::Database::Open(db_path, macassist::Access::ReadWrite,
-                                       &err);
-  if (!wdb) {
+  // The writer owns the read-write connection and runs the sweep on its own
+  // long-lived thread. Start() opens + migrates synchronously (so the reader
+  // opens against a finished schema), then launches the background crawl.
+  macassist::Writer writer(db_path, roots);
+  if (!writer.Start(&err)) {
     std::fprintf(stderr, "macassistd: open index %s failed: %s\n",
                  db_path.c_str(), err.c_str());
     return 1;
   }
   std::fprintf(stderr, "macassistd: index at %s\n", db_path.c_str());
 
-  // Phase 2: crawl synchronously at startup. This becomes a background
-  // sweeper thread (with FSEvents) in a later brick.
-  std::fprintf(stderr, "macassistd: crawling %zu root(s)...\n", roots.size());
-  const macassist::CrawlStats stats = macassist::CrawlRebuild(*wdb, roots);
-  std::fprintf(stderr, "macassistd: indexed %lld of %lld files scanned\n",
-               stats.indexed, stats.scanned);
-
-  // Read-only connection for the query path, opened after the writer has
-  // created the schema. WAL serves its reads concurrently with future writes.
+  // Read-only connection for the query path, opened after the writer created
+  // the schema. WAL serves its reads concurrently with the ongoing sweep.
   auto rdb = macassist::Database::Open(db_path, macassist::Access::ReadOnly,
                                        &err);
   if (!rdb) {
@@ -91,7 +84,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  macassist::RequestRouter router(*rdb);
+  macassist::RequestRouter router(*rdb, writer.status());
   macassist::SocketServer server(
       socket_path,
       [&router](const std::string& req) { return router.Handle(req); });
@@ -109,5 +102,6 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "macassistd: listening on %s\n", socket_path.c_str());
   server.Run();
   std::fprintf(stderr, "macassistd: shutting down\n");
+  writer.Stop();  // end the sweep promptly; the destructor joins the thread
   return 0;
 }
