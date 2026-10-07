@@ -181,13 +181,36 @@ sub-millisecond, so retaining old folders buys nothing without a deliberate
 
 ## 5. Sweep subsystem
 
+**Threading & concurrency (locked 2026-10-07).** Concurrency is handled by *topology + SQLite
+WAL*, never by an application-level lock over the database:
+
+- **Single writer, connection-per-role.** Exactly one *writer* thread owns the write
+  connection and is the only thread that writes; it services one **write-command queue**
+  (metadata upsert, apply-extraction, tombstone, purge). The IPC query handler uses its own
+  *read-only* connection. WAL (already enabled) lets readers run against the last committed
+  snapshot *concurrently* with an in-flight write and serializes writers internally — so an
+  extraction batch never blocks a query. A `std::shared_mutex` over the DB is explicitly
+  rejected: redundant with WAL, and it would reintroduce exactly the reader-blocks-on-writer
+  stall WAL removes, hurting the ≤1.5 s query path.
+- **Extraction workers are DB-free.** The worker pool (N = performance cores / 2, ⚙) pulls
+  paths from a **job queue**, runs only CPU/IO-bound extraction, and posts finished payloads
+  as apply-extraction commands onto the writer's command queue. All writes stay on one
+  connection — no competing writers, no `SQLITE_BUSY` churn.
+- **Primitives.** Both queues are `mutex` + `condition_variable` (producer/consumer — every
+  access mutates, so no rwlock). Status counters read by the `status` IPC (`indexedFiles`,
+  `sweeping`, progress) are `std::atomic`. In-memory config, *if* ever cached rather than
+  read from the DB, would be copy-on-write via an `atomic<shared_ptr>` — still no rwlock.
+
+Pipeline:
+
 - **Initial crawl:** breadth-first per root, honoring exclusions (default globs:
   `node_modules`, `.git`, `*.app`, caches, `~/Library`). Stat-only pass populates `files`
   fast (searchable by name within seconds); extraction jobs queue behind it.
 - **Extraction workers:** thread pool (N = performance cores / 2, ⚙) pulling from a
-  priority queue — recently modified files first. Each worker: fingerprint check → type
-  dispatch → extract → single transaction updating `files`, `file_text`, `file_meta`,
-  `file_vec`. Embedding batched (CoreML likes batches).
+  priority job queue — recently modified files first. Each worker: type dispatch → extract →
+  hand the payload to the writer, which commits `files`, `file_text`, `file_meta`,
+  `file_vec` in one transaction (fingerprint-skip for unchanged files is decided on the
+  writer). Embedding batched (CoreML likes batches).
 - **Live updates:** one FSEvents stream over all roots, 2 s latency coalescing. Events
   enqueue re-stat → re-extract if fingerprint changed; deletes set `missing=1`
   (purged at reconciliation).
@@ -272,10 +295,16 @@ Daemon: socket server, stat-only crawl of one hardcoded root, `files` + name-onl
 naive keyword query. App: hotkey, panel, results list, Enter-to-open. `mactl` works.
 *Done when: hotkey → type "resume" → resume.pdf opens, end-to-end.*
 
-**Phase 2 — Real indexing.**
-Full schema; configurable roots + exclusions; FSEvents; reconciliation; extraction
-pipeline (PDF/text, OCR, media tags); fingerprinting; politeness. Fixture corpus + tests.
-*Done when: index survives file moves/renames/deletes and a 50k-file crawl finishes in minutes with correct content search.*
+**Phase 2 — Real indexing.** *(scope refined 2026-10-07)*
+Background incremental sweeper (upsert + fingerprint-skip + `missing` tombstones);
+configurable roots + exclusions schema; FSEvents live updates; reconciliation;
+fingerprinting; politeness; **cheap extraction only** — PDF/plain-text + media tags
+(EXIF/ID3/MP4). Vision OCR and office-doc (docx/pages) parsing defer to **Phase 2.5** (OCR
+is the thermal risk and can't finish during the crawl). Fixture corpus + tests.
+*Done when, across three distinct goals:* (liveness) the index reflects moves/renames/deletes
+within seconds and survives restarts; (crawl speed) a 50k-file stat pass makes filenames
+searchable in minutes; (content) extracted text/tags fill in progressively in the background
+without blocking search.*
 
 **Phase 3 — Intelligence.**
 Swift interop layer; AFM `SearchIntent` guided generation with prewarmed session; CoreML

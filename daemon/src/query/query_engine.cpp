@@ -55,7 +55,7 @@ std::vector<FileHit> SearchFiles(Database& db, const std::string& text,
          "SELECT f.id, f.path, f.name, f.kind, f.modified_at, "
          "  bm25(file_text, 10.0, 4.0, 2.0, 3.0) AS score "
          "FROM file_text ft JOIN files f ON f.id = ft.rowid "
-         "WHERE file_text MATCH ?1 "
+         "WHERE file_text MATCH ?1 AND f.missing = 0 "
          "ORDER BY score ASC LIMIT ?2",
          &err);
   if (!s) return hits;

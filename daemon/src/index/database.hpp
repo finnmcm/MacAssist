@@ -24,13 +24,21 @@ class Stmt {
   sqlite3_stmt* stmt_ = nullptr;
 };
 
+// How a connection is opened. The index is accessed through two roles:
+// one ReadWrite connection (the sweeper -- the only writer) and one or
+// more ReadOnly connections (the query path). See PLAN.md section 5.
+enum class Access { ReadWrite, ReadOnly };
+
 // RAII wrapper around a SQLite connection with the MacAssist schema.
 class Database {
  public:
-  // Opens (creating if needed) the database at `path`, applies pragmas
-  // and migrations. Returns nullptr and sets *err on failure.
+  // Opens the database at `path` with the given access role. ReadWrite
+  // creates the file if needed, applies pragmas, and runs migrations
+  // (which, pre-release, rebuild the schema on any version change).
+  // ReadOnly assumes the schema already exists and forbids writes.
+  // Returns nullptr and sets *err on failure.
   static std::unique_ptr<Database> Open(const std::string& path,
-                                        std::string* err);
+                                        Access access, std::string* err);
   ~Database();
   Database(const Database&) = delete;
   Database& operator=(const Database&) = delete;

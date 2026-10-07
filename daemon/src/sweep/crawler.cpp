@@ -59,14 +59,18 @@ CrawlStats CrawlRebuild(Database& db, const std::vector<std::string>& roots) {
 
   Stmt ins(db.handle(),
            "INSERT OR IGNORE INTO files"
-           "(path,name,ext,kind,size,created_at,modified_at,indexed_at,"
-           " fingerprint) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+           "(root_id,path,name,ext,kind,size,created_at,modified_at,"
+           " indexed_at,fingerprint,missing)"
+           " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0)",
            &err);
   Stmt insft(db.handle(),
              "INSERT INTO file_text(rowid,name,path_tokens,content,tags)"
              " VALUES(?1,?2,?3,'','')",
              &err);
-  if (!ins || !insft) {
+  Stmt ins_root(db.handle(),
+                "INSERT OR IGNORE INTO roots(path) VALUES(?1)", &err);
+  Stmt sel_root(db.handle(), "SELECT id FROM roots WHERE path=?1", &err);
+  if (!ins || !insft || !ins_root || !sel_root) {
     std::fprintf(stderr, "crawler: prepare failed: %s\n", err.c_str());
     db.Exec("ROLLBACK", &err);
     return stats;
@@ -75,6 +79,18 @@ CrawlStats CrawlRebuild(Database& db, const std::vector<std::string>& roots) {
   const long long now = static_cast<long long>(::time(nullptr));
 
   for (const auto& root : roots) {
+    // Ensure the root has a row and fetch its id, so each file records which
+    // root it belongs to (used by reconciliation and config in later bricks).
+    long long root_id = 0;
+    sqlite3_reset(ins_root.get());
+    sqlite3_bind_text(ins_root.get(), 1, root.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(ins_root.get());
+    sqlite3_reset(sel_root.get());
+    sqlite3_bind_text(sel_root.get(), 1, root.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(sel_root.get()) == SQLITE_ROW) {
+      root_id = sqlite3_column_int64(sel_root.get(), 0);
+    }
+
     std::error_code ec;
     auto it = fs::recursive_directory_iterator(
         root, fs::directory_options::skip_permission_denied, ec);
@@ -118,15 +134,16 @@ CrawlStats CrawlRebuild(Database& db, const std::vector<std::string>& roots) {
 
       sqlite3_stmt* s = ins.get();
       sqlite3_reset(s);
-      sqlite3_bind_text(s, 1, path.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_text(s, 2, name.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_text(s, 3, ext.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_text(s, 4, kind.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_int64(s, 5, size);
-      sqlite3_bind_int64(s, 6, ctime);
-      sqlite3_bind_int64(s, 7, mtime);
-      sqlite3_bind_int64(s, 8, now);
-      sqlite3_bind_text(s, 9, fp.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int64(s, 1, root_id);
+      sqlite3_bind_text(s, 2, path.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(s, 3, name.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(s, 4, ext.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(s, 5, kind.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int64(s, 6, size);
+      sqlite3_bind_int64(s, 7, ctime);
+      sqlite3_bind_int64(s, 8, mtime);
+      sqlite3_bind_int64(s, 9, now);
+      sqlite3_bind_text(s, 10, fp.c_str(), -1, SQLITE_TRANSIENT);
       if (sqlite3_step(s) != SQLITE_DONE) continue;
       if (sqlite3_changes(db.handle()) == 0) continue;  // duplicate path
       const long long id = sqlite3_last_insert_rowid(db.handle());

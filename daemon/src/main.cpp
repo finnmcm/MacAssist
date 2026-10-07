@@ -63,8 +63,11 @@ int main(int argc, char** argv) {
   }
 
   std::string err;
-  auto db = macassist::Database::Open(db_path, &err);
-  if (!db) {
+  // Writer connection: owns every mutation (the crawl here; the background
+  // sweeper in a later brick). Opening it runs the schema migration.
+  auto wdb = macassist::Database::Open(db_path, macassist::Access::ReadWrite,
+                                       &err);
+  if (!wdb) {
     std::fprintf(stderr, "macassistd: open index %s failed: %s\n",
                  db_path.c_str(), err.c_str());
     return 1;
@@ -74,11 +77,21 @@ int main(int argc, char** argv) {
   // Phase 2: crawl synchronously at startup. This becomes a background
   // sweeper thread (with FSEvents) in a later brick.
   std::fprintf(stderr, "macassistd: crawling %zu root(s)...\n", roots.size());
-  const macassist::CrawlStats stats = macassist::CrawlRebuild(*db, roots);
+  const macassist::CrawlStats stats = macassist::CrawlRebuild(*wdb, roots);
   std::fprintf(stderr, "macassistd: indexed %lld of %lld files scanned\n",
                stats.indexed, stats.scanned);
 
-  macassist::RequestRouter router(*db);
+  // Read-only connection for the query path, opened after the writer has
+  // created the schema. WAL serves its reads concurrently with future writes.
+  auto rdb = macassist::Database::Open(db_path, macassist::Access::ReadOnly,
+                                       &err);
+  if (!rdb) {
+    std::fprintf(stderr, "macassistd: open index (read) failed: %s\n",
+                 err.c_str());
+    return 1;
+  }
+
+  macassist::RequestRouter router(*rdb);
   macassist::SocketServer server(
       socket_path,
       [&router](const std::string& req) { return router.Handle(req); });
