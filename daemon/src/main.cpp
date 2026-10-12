@@ -1,4 +1,5 @@
 #include <csignal>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -35,6 +36,7 @@ int main(int argc, char** argv) {
   std::string socket_path = macassist::DefaultSocketPath();
   std::string db_path = macassist::DefaultDbPath();
   std::vector<std::string> roots;
+  long long reconcile_secs = 86400;  // 24h default (--reconcile-interval)
 
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -51,6 +53,8 @@ int main(int argc, char** argv) {
       db_path = next("--db");
     } else if (a == "--root") {
       roots.push_back(next("--root"));
+    } else if (a == "--reconcile-interval") {
+      reconcile_secs = std::atoll(next("--reconcile-interval").c_str());
     } else {
       std::fprintf(stderr, "macassistd: unknown argument: %s\n", a.c_str());
       return 2;
@@ -66,7 +70,8 @@ int main(int argc, char** argv) {
   // The writer owns the read-write connection and runs the sweep on its own
   // long-lived thread. Start() opens + migrates synchronously (so the reader
   // opens against a finished schema), then launches the background crawl.
-  macassist::Writer writer(db_path, roots);
+  macassist::Writer writer(db_path, roots,
+                           std::chrono::seconds(reconcile_secs));
   if (!writer.Start(&err)) {
     std::fprintf(stderr, "macassistd: open index %s failed: %s\n",
                  db_path.c_str(), err.c_str());

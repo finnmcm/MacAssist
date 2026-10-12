@@ -13,7 +13,7 @@ See `PLAN.md` for the full design and rationale.
 | Phase | Scope | Status |
 |---|---|---|
 | **Phase 1** | Vertical slice: hotkey → panel → daemon → filename FTS → open | ✅ Done (on `main`) |
-| **Phase 2** | Real indexing: live sweeper + content extraction | 🚧 In progress — bricks 1–3 of 6 done |
+| **Phase 2** | Real indexing: live sweeper + content extraction | 🚧 In progress — bricks 1–4 of 6 done |
 | **Phase 3** | Intelligence: AFM `SearchIntent` + CoreML embeddings + two-stage query | ⬜ Not started |
 | **Phase 4** | Product polish: settings, onboarding, launchd, signing/notarization/DMG | ⬜ Not started |
 | **Phase 5** | Stretch: voice, transcription, chunked embeddings, auto-open | ⬜ Not started |
@@ -32,8 +32,9 @@ See `PLAN.md` for the full design and rationale.
 | `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v3, writer/reader split |
 | `sweep/crawler` | Full incremental walk (upsert + fingerprint-skip + tombstone) | ✅ |
 | `sweep/indexer` | Shared per-file upsert / tombstone (cached statements) | ✅ |
-| `sweep/writer` | Long-lived writer thread: owns RW conn, runs crawl, drains command queue | ✅ |
+| `sweep/writer` | Long-lived writer thread: owns RW conn, runs crawl + periodic reconciliation, drains command queue | ✅ |
 | `sweep/fs_watcher` | FSEvents live updates (ObjC++/`.mm`, GCD dispatch queue) | ✅ |
+| `sweep/politeness` | Thermal (NSProcessInfo) + battery (IOKit) sensors; crawl throttle under thermal pressure | ✅ |
 | `query/query_engine` | FTS5 BM25 over name + path tokens; excludes tombstones | ✅ (content/tags cols empty until brick 5) |
 | `extract/` | ObjC++ bridges: PDFKit text, media tags, (later OCR) | ⬜ brick 5 |
 | `ai/` | Swift interop: AFM session, CoreML embedder | ⬜ Phase 3 |
@@ -74,6 +75,14 @@ hits. Daemon did a one-shot stat-only crawl at startup; name-only FTS. (See git 
   off-thread producer). Idempotent "re-examine path" semantics (stat→upsert or tombstone);
   drop/overflow→full rescan. `lastEventId` persisted in `meta` for replay. Shared `Indexer`
   extracted so the crawl and FSEvents share one copy of the upsert SQL.
+- **Brick 4 — reconciliation + politeness** (branch). The writer's drain loop became a
+  `wait_until(next_reconcile)`: when idle for a full interval it runs a reconciliation crawl
+  (the FSEvents-drop / offline backstop), via a `RunFullCrawl(reason)` helper shared by the
+  initial crawl, reconcile, and FSEvents full-rescan. Interval is `--reconcile-interval`
+  (default 24h). Writer thread runs at `QOS_CLASS_UTILITY`. `Politeness` (sweep/politeness.mm)
+  reads thermal (`NSProcessInfo`) + battery (IOKit); the crawl pauses under serious/critical
+  thermal pressure. **Decided:** startup always runs a full crawl and the watcher uses
+  `sinceNow` (no replay) — the crawl is the source of truth for offline changes.
 
 **Verified** (ad-hoc, via `mactl` + `sqlite3`): fresh crawl indexes all; a re-crawl re-indexes
 only changed/new files and tombstones deletes; and with the daemon **running**, live
@@ -84,15 +93,11 @@ create/delete/rename/modify reflect in query results within ~2s.
 ## What's next
 
 ### Phase 2 remaining
-- **Brick 4 — reconciliation + politeness.** Periodic full re-walk (nightly) as the
-  FSEvents-drop backstop — reuses `CrawlIncremental` on the writer thread. Thermal/battery
-  pausing (`NSProcessInfo.thermalState` + power source), QoS-utility threads. **Open decision**
-  deferred here: quick-restart FSEvents replay (via `fsevents_last_id`) vs. always-full-crawl
-  at startup.
 - **Brick 5 — cheap extraction.** Worker pool (second queue producer) + ObjC++ bridges for
   PDF text (PDFKit), plain text, and media tags (AVFoundation/EXIF/ID3) → fill the empty
-  `content`/`tags` FTS columns + `file_meta`. Honor PLAN §3 caps. **Vision OCR and office-doc
-  (docx/pages) parsing are deferred to Phase 2.5** (OCR is the thermal/latency risk).
+  `content`/`tags` FTS columns + `file_meta`. Honor PLAN §3 caps. Reuses `Politeness` and adds
+  the battery-aware pausing of heavy extraction that brick 4 deferred. **Vision OCR and
+  office-doc (docx/pages) parsing are deferred to Phase 2.5** (OCR is the thermal/latency risk).
 - **Brick 6 — fixture corpus + tests.** Turn the ad-hoc shell checks into a real
   Catch2/GoogleTest suite + a golden-query set.
 
@@ -116,8 +121,10 @@ create/delete/rename/modify reflect in query results within ~2s.
 # and the six home roots):
 ./build/daemon/macassistd
 
-# Dev loop against a throwaway corpus — keep the socket path short (< ~104 chars):
-./build/daemon/macassistd --socket /tmp/dev.sock --db /tmp/dev.db --root /path/to/corpus
+# Dev loop against a throwaway corpus — keep the socket path short (< ~104 chars).
+# --reconcile-interval <secs> overrides the 24h default (use a few secs to watch reconciles):
+./build/daemon/macassistd --socket /tmp/dev.sock --db /tmp/dev.db --root /path/to/corpus \
+    --reconcile-interval 2
 ./build/tools/mactl/mactl --socket /tmp/dev.sock status
 ./build/tools/mactl/mactl --socket /tmp/dev.sock query resume
 ```

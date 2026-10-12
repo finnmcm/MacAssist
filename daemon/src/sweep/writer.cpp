@@ -1,7 +1,8 @@
 #include "sweep/writer.hpp"
 
+#include <pthread/qos.h>
+
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <system_error>
 #include <utility>
@@ -15,8 +16,9 @@ namespace fs = std::filesystem;
 
 namespace macassist {
 
-Writer::Writer(std::string db_path, std::vector<std::string> roots)
-    : db_path_(std::move(db_path)) {
+Writer::Writer(std::string db_path, std::vector<std::string> roots,
+               std::chrono::seconds reconcile_interval)
+    : db_path_(std::move(db_path)), reconcile_interval_(reconcile_interval) {
   // Canonicalize roots so path-prefix matching lines up with the realpaths
   // FSEvents reports (e.g. /tmp -> /private/tmp). weakly_canonical resolves
   // the existing portion and leaves the rest; fall back to the raw path.
@@ -38,25 +40,18 @@ bool Writer::Start(std::string* err) {
   db_ = Database::Open(db_path_, Access::ReadWrite, err);
   if (!db_) return false;
 
-  // Read the last processed FSEvents id BEFORE launching the thread, while the
-  // connection is still single-threaded on this one.
-  const std::string v = db_->GetMeta("fsevents_last_id");
-  const uint64_t since =
-      v.empty() ? FsWatcher::kSinceNow
-                : static_cast<uint64_t>(std::strtoull(v.c_str(), nullptr, 10));
-
   thread_ = std::thread([this] { Run(); });
 
-  // Start watching now, before the initial crawl finishes. Events that arrive
-  // during the crawl buffer in the queue and are applied after; re-examine is
-  // idempotent, so crawl/event ordering cannot corrupt the index.
+  // Startup always runs a full crawl (see Run), which is the source of truth
+  // for anything that changed while the daemon was down -- so the watcher only
+  // needs events from now forward, not a replay of history.
   watcher_ = std::make_unique<FsWatcher>(
       roots_,
       [this](const std::string& path, uint64_t id) {
         Enqueue({WriteCommand::Kind::kExaminePath, path, id});
       },
       [this]() { Enqueue({WriteCommand::Kind::kFullRescan, {}, 0}); });
-  if (!watcher_->Start(since)) {
+  if (!watcher_->Start(FsWatcher::kSinceNow)) {
     std::fprintf(stderr,
                  "macassistd: FSEvents watcher failed to start; "
                  "live updates disabled\n");
@@ -67,7 +62,7 @@ bool Writer::Start(std::string* err) {
 void Writer::Stop() {
   if (watcher_) watcher_->Stop();  // no more enqueues after this
   stop_.store(true);
-  cv_.notify_all();  // wake the drain loop in Run()
+  cv_.notify_all();  // wake the drain/reconcile loop in Run()
 }
 
 void Writer::Enqueue(WriteCommand cmd) {
@@ -88,6 +83,21 @@ long long Writer::RootIdForPath(Indexer& idx, const std::string& path) {
   return 0;  // outside the roots -- shouldn't happen for FSEvents paths
 }
 
+void Writer::RunFullCrawl(Indexer& idx, const char* reason) {
+  // Counters report progress of the current sweep, so reset them each pass.
+  status_.scanned.store(0);
+  status_.indexed.store(0);
+  status_.sweeping.store(true);
+  std::fprintf(stderr, "macassistd: %s sweep over %zu root(s)...\n", reason,
+               roots_.size());
+  CrawlIncremental(idx, *db_, roots_, status_, stop_, politeness_);
+  status_.sweeping.store(false);
+  last_full_pass_ = std::chrono::steady_clock::now();
+  std::fprintf(stderr,
+               "macassistd: %s sweep done -- %lld scanned, %lld indexed\n",
+               reason, status_.scanned.load(), status_.indexed.load());
+}
+
 void Writer::ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch) {
   bool rescan = false;
   uint64_t max_id = 0;
@@ -103,9 +113,7 @@ void Writer::ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch) {
   if (rescan) {
     // A drop/overflow was reported: a full crawl supersedes the per-path
     // commands in this batch (it re-examines everything).
-    status_.sweeping.store(true);
-    CrawlIncremental(idx, *db_, roots_, status_, stop_);
-    status_.sweeping.store(false);
+    RunFullCrawl(idx, "rescan");
   } else {
     // Per-path reconcile: stat each path; present -> upsert, gone -> tombstone.
     // New files get the last completed generation so the next full pass does
@@ -126,32 +134,38 @@ void Writer::ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch) {
 }
 
 void Writer::Run() {
+  // Background sweeps run at utility QoS so they never contend with the UI.
+  pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+  std::fprintf(stderr, "macassistd: power: on_battery=%d thermal_pressure=%d\n",
+               politeness_.OnBattery(), politeness_.UnderThermalPressure());
+
   Indexer idx(*db_);
   if (!idx.valid()) {
     std::fprintf(stderr, "macassistd: indexer init failed; sweeps disabled\n");
+    last_full_pass_ = std::chrono::steady_clock::now();
   } else {
-    // Initial sweep: a batch crawl run directly on the writer thread.
-    status_.sweeping.store(true);
-    std::fprintf(stderr, "macassistd: initial sweep over %zu root(s)...\n",
-                 roots_.size());
-    CrawlIncremental(idx, *db_, roots_, status_, stop_);
-    status_.sweeping.store(false);
-    std::fprintf(stderr,
-                 "macassistd: sweep done -- %lld scanned, %lld indexed\n",
-                 status_.scanned.load(), status_.indexed.load());
+    RunFullCrawl(idx, "initial");
   }
 
-  // Steady state: drain FSEvents-driven commands as they arrive, parked
-  // (blocked, zero CPU) on the condvar when the queue is empty.
+  // Steady state: drain FSEvents-driven commands as they arrive; when idle for
+  // a full reconcile interval, run a reconciliation crawl (the FSEvents-drop /
+  // offline backstop). Parked (zero CPU) between events and reconciles.
   for (;;) {
     std::deque<WriteCommand> batch;
     {
       std::unique_lock<std::mutex> lk(mtx_);
-      cv_.wait(lk, [this] { return stop_.load() || !queue_.empty(); });
-      if (queue_.empty()) return;  // woken by Stop() with nothing left to do
-      batch.swap(queue_);
+      const auto deadline = last_full_pass_ + reconcile_interval_;
+      cv_.wait_until(lk, deadline,
+                     [this] { return stop_.load() || !queue_.empty(); });
+      if (stop_.load() && queue_.empty()) return;
+      if (!queue_.empty()) batch.swap(queue_);
     }
-    if (idx.valid()) ApplyBatch(idx, batch);
+    if (!batch.empty()) {
+      if (idx.valid()) ApplyBatch(idx, batch);
+      continue;
+    }
+    // Woken by the deadline with nothing queued: time to reconcile.
+    if (!stop_.load() && idx.valid()) RunFullCrawl(idx, "reconcile");
   }
 }
 

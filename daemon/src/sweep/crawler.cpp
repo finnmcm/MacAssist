@@ -1,13 +1,16 @@
 #include "sweep/crawler.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
 
 #include "index/database.hpp"
 #include "sweep/indexer.hpp"
+#include "sweep/politeness.hpp"
 #include "sweep/sweep_status.hpp"
 
 namespace fs = std::filesystem;
@@ -28,7 +31,8 @@ bool IsExcludedDir(const std::string& name) {
 
 void CrawlIncremental(Indexer& idx, Database& db,
                       const std::vector<std::string>& roots,
-                      SweepStatus& status, const std::atomic<bool>& stop) {
+                      SweepStatus& status, const std::atomic<bool>& stop,
+                      const Politeness& politeness) {
   std::string err;
   const long long gen = idx.ReadGen() + 1;
 
@@ -42,6 +46,22 @@ void CrawlIncremental(Indexer& idx, Database& db,
       db.Exec("BEGIN", &err);
       in_batch = 0;
     }
+  };
+
+  // Every so often, back off while the machine is under thermal pressure:
+  // flush progress, then sleep in short slices until it clears (or stop).
+  long long since_check = 0;
+  auto maybe_throttle = [&]() {
+    if (++since_check < 256) return;
+    since_check = 0;
+    if (!politeness.ShouldPauseSweep()) return;
+    db.Exec("COMMIT", &err);
+    std::fprintf(stderr, "crawler: thermal pressure -- pausing sweep\n");
+    while (politeness.ShouldPauseSweep() && !stop.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    db.Exec("BEGIN", &err);
+    in_batch = 0;
   };
 
   for (const auto& root : roots) {
@@ -80,6 +100,7 @@ void CrawlIncremental(Indexer& idx, Database& db,
         status.indexed.fetch_add(1, std::memory_order_relaxed);
       }
       maybe_commit();
+      maybe_throttle();
     }
   }
 

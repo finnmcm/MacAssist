@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -9,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "sweep/politeness.hpp"
 #include "sweep/sweep_status.hpp"
 
 namespace macassist {
@@ -28,13 +30,14 @@ struct WriteCommand {
 };
 
 // Owns the single read-write connection and the long-lived thread that is the
-// only mutator of the index. The thread runs the initial crawl as a batch job,
-// then drains FSEvents-driven commands from a queue, parked (zero CPU) when
-// idle. A full crawl/reconciliation and per-path reconciles all run on this
+// only mutator of the index. The thread runs the initial crawl, then drains
+// FSEvents-driven commands and, once idle for a full reconcile interval, runs a
+// reconciliation crawl (the FSEvents-drop / offline backstop) -- all on this
 // one thread, so the write connection is never touched concurrently.
 class Writer {
  public:
-  Writer(std::string db_path, std::vector<std::string> roots);
+  Writer(std::string db_path, std::vector<std::string> roots,
+         std::chrono::seconds reconcile_interval);
   ~Writer();  // signals stop and joins the thread
 
   Writer(const Writer&) = delete;
@@ -53,20 +56,24 @@ class Writer {
 
  private:
   void Run();  // thread body
+  void RunFullCrawl(Indexer& idx, const char* reason);
   void ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch);
   long long RootIdForPath(Indexer& idx, const std::string& path);
   void Enqueue(WriteCommand cmd);
 
   std::string db_path_;
   std::vector<std::string> roots_;  // canonicalized to match FSEvents paths
-  std::unique_ptr<Database> db_;    // write connection; thread-owned after Start
+  std::chrono::seconds reconcile_interval_;
+  std::unique_ptr<Database> db_;  // write connection; thread-owned after Start
   std::unique_ptr<FsWatcher> watcher_;
+  Politeness politeness_;
   SweepStatus status_;
 
   std::atomic<bool> stop_{false};
   std::mutex mtx_;
   std::condition_variable cv_;
   std::deque<WriteCommand> queue_;  // guarded by mtx_
+  std::chrono::steady_clock::time_point last_full_pass_{};  // writer-thread only
 
   std::thread thread_;
 };
