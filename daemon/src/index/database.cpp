@@ -105,6 +105,30 @@ long long Database::CountFiles() {
              : 0;
 }
 
+std::string Database::GetMeta(const std::string& key) {
+  std::string err;
+  Stmt s(db_, "SELECT value FROM meta WHERE key=?1", &err);
+  if (!s) return "";
+  sqlite3_bind_text(s.get(), 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  if (sqlite3_step(s.get()) == SQLITE_ROW) {
+    const unsigned char* t = sqlite3_column_text(s.get(), 0);
+    if (t != nullptr) return reinterpret_cast<const char*>(t);
+  }
+  return "";
+}
+
+bool Database::SetMeta(const std::string& key, const std::string& value,
+                       std::string* err) {
+  Stmt s(db_,
+         "INSERT INTO meta(key,value) VALUES(?1,?2) "
+         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+         err);
+  if (!s) return false;
+  sqlite3_bind_text(s.get(), 1, key.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(s.get(), 2, value.c_str(), -1, SQLITE_TRANSIENT);
+  return sqlite3_step(s.get()) == SQLITE_DONE;
+}
+
 bool Database::Migrate(std::string* err) {
   if (ReadSchemaVersion(db_) == kSchemaVersion) return true;
 

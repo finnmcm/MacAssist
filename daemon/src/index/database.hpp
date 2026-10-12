@@ -51,6 +51,12 @@ class Database {
   // Count of present (non-tombstoned) files (0 on error).
   long long CountFiles();
 
+  // Reads meta[key]; returns "" if absent or on error.
+  std::string GetMeta(const std::string& key);
+  // Upserts meta[key]=value. Returns false and sets *err on failure.
+  bool SetMeta(const std::string& key, const std::string& value,
+               std::string* err);
+
  private:
   explicit Database(sqlite3* db) : db_(db) {}
   bool Migrate(std::string* err);
