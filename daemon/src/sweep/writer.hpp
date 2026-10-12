@@ -18,15 +18,21 @@ namespace macassist {
 class Database;
 class Indexer;
 class FsWatcher;
+class Extractor;
+struct ExtractResult;
 
-// A mutation the writer thread must apply, produced off-thread by the
-// FsWatcher and consumed by the writer. The full crawl does NOT go through
-// here -- it runs directly on the writer thread as a batch (PLAN.md section 5).
+// A mutation the writer thread must apply, produced off-thread (by the
+// FsWatcher or the Extractor) and consumed by the writer. The full crawl does
+// NOT go through here -- it runs directly on the writer thread as a batch
+// (PLAN.md section 5).
 struct WriteCommand {
-  enum class Kind { kExaminePath, kFullRescan };
+  enum class Kind { kExaminePath, kFullRescan, kApplyExtract };
   Kind kind;
   std::string path;       // kExaminePath: path to re-stat and reconcile
   uint64_t event_id = 0;  // FSEvents id, for replay bookkeeping
+  // kApplyExtract only: the extracted content/tags/meta to write. Carried by
+  // shared_ptr so the common (small) FSEvents commands stay cheap to move.
+  std::shared_ptr<ExtractResult> extract;
 };
 
 // Owns the single read-write connection and the long-lived thread that is the
@@ -37,7 +43,7 @@ struct WriteCommand {
 class Writer {
  public:
   Writer(std::string db_path, std::vector<std::string> roots,
-         std::chrono::seconds reconcile_interval);
+         std::chrono::seconds reconcile_interval, bool pretend_battery = false);
   ~Writer();  // signals stop and joins the thread
 
   Writer(const Writer&) = delete;
@@ -54,6 +60,9 @@ class Writer {
   // Live progress of the current/last sweep, for the status IPC.
   const SweepStatus& status() const { return status_; }
 
+  // Cumulative extraction progress, for the status IPC.
+  const ExtractStatus& extract_status() const { return extract_status_; }
+
  private:
   void Run();  // thread body
   void RunFullCrawl(Indexer& idx, const char* reason);
@@ -66,8 +75,10 @@ class Writer {
   std::chrono::seconds reconcile_interval_;
   std::unique_ptr<Database> db_;  // write connection; thread-owned after Start
   std::unique_ptr<FsWatcher> watcher_;
+  std::unique_ptr<Extractor> extractor_;  // off-thread content extraction
   Politeness politeness_;
   SweepStatus status_;
+  ExtractStatus extract_status_;
 
   std::atomic<bool> stop_{false};
   std::mutex mtx_;

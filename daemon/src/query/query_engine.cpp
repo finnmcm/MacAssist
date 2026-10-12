@@ -48,19 +48,34 @@ std::vector<FileHit> SearchFiles(Database& db, const std::string& text,
   const std::string match = BuildMatch(text);
   if (match.empty()) return hits;
 
-  // bm25 weights favor a name hit over a deep-path hit; content/tags are
-  // in the middle so they contribute once extraction fills them in.
+  // The same tokens restricted to the name column, so we can tell a direct
+  // filename hit from a content/path-only hit. FTS5 column filter: the group
+  // after `{name} :` is matched against the `name` column only.
+  const std::string name_match = "{name} : (" + match + ")";
+
+  // Two-tier ranking: a direct name match always ranks above a hit that only
+  // matched content/path/tags -- so "open my_photo" surfaces the file named
+  // my_photo before any document that merely mentions it. `name_hit` is
+  // non-NULL for rows whose name matched (via a LEFT JOIN to a name-only
+  // match); `name_hit IS NULL` sorts those first, and bm25 (name>path>tags>
+  // content weights) orders within a tier. Tiering is in the ORDER BY, so it
+  // applies before LIMIT. (FTS5 MATCH rejects a table alias, hence the derived
+  // table rather than a correlated subquery.)
   std::string err;
   Stmt s(db.handle(),
          "SELECT f.id, f.path, f.name, f.kind, f.modified_at, "
-         "  bm25(file_text, 10.0, 4.0, 2.0, 3.0) AS score "
+         "  bm25(file_text, 10.0, 4.0, 2.0, 3.0) AS score, "
+         "  nmz.rowid AS name_hit "
          "FROM file_text ft JOIN files f ON f.id = ft.rowid "
+         "LEFT JOIN (SELECT rowid FROM file_text WHERE file_text MATCH ?2) nmz "
+         "  ON nmz.rowid = ft.rowid "
          "WHERE file_text MATCH ?1 AND f.missing = 0 "
-         "ORDER BY score ASC LIMIT ?2",
+         "ORDER BY (name_hit IS NULL), score ASC LIMIT ?3",
          &err);
   if (!s) return hits;
   sqlite3_bind_text(s.get(), 1, match.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_int(s.get(), 2, limit);
+  sqlite3_bind_text(s.get(), 2, name_match.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(s.get(), 3, limit);
 
   while (sqlite3_step(s.get()) == SQLITE_ROW) {
     FileHit h;

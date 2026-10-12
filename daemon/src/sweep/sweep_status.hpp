@@ -12,4 +12,11 @@ struct SweepStatus {
   std::atomic<long long> indexed{0};  // indexed-type files inserted or updated
 };
 
+// Live extraction progress (brick 5): written by the writer as it applies
+// extraction results, read by the status IPC. The matching "still pending"
+// count is read live from the index (Database::CountPending), not kept here.
+struct ExtractStatus {
+  std::atomic<long long> extracted{0};  // files whose content/tags were applied
+};
+
 }  // namespace macassist

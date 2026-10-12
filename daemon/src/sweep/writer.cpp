@@ -7,6 +7,8 @@
 #include <system_error>
 #include <utility>
 
+#include "extract/extractor.hpp"
+#include "extract/text_extractors.hpp"
 #include "index/database.hpp"
 #include "sweep/crawler.hpp"
 #include "sweep/fs_watcher.hpp"
@@ -17,8 +19,10 @@ namespace fs = std::filesystem;
 namespace macassist {
 
 Writer::Writer(std::string db_path, std::vector<std::string> roots,
-               std::chrono::seconds reconcile_interval)
-    : db_path_(std::move(db_path)), reconcile_interval_(reconcile_interval) {
+               std::chrono::seconds reconcile_interval, bool pretend_battery)
+    : db_path_(std::move(db_path)),
+      reconcile_interval_(reconcile_interval),
+      politeness_(pretend_battery) {
   // Canonicalize roots so path-prefix matching lines up with the realpaths
   // FSEvents reports (e.g. /tmp -> /private/tmp). weakly_canonical resolves
   // the existing portion and leaves the rest; fall back to the raw path.
@@ -40,6 +44,23 @@ bool Writer::Start(std::string* err) {
   db_ = Database::Open(db_path_, Access::ReadWrite, err);
   if (!db_) return false;
 
+  // The extractor reads stale rows on its own ReadOnly connection and posts
+  // results back through our command queue. Safe to open now: the schema
+  // exists (Open migrated it). A failure just disables content extraction.
+  extractor_ = std::make_unique<Extractor>(
+      db_path_, politeness_, status_.sweeping,
+      [this](std::shared_ptr<ExtractResult> r) {
+        Enqueue({WriteCommand::Kind::kApplyExtract, {}, 0, std::move(r)});
+      });
+  std::string ext_err;
+  if (!extractor_->Start(&ext_err)) {
+    std::fprintf(stderr,
+                 "macassistd: extractor failed to start (%s); content "
+                 "extraction disabled\n",
+                 ext_err.c_str());
+    extractor_.reset();
+  }
+
   thread_ = std::thread([this] { Run(); });
 
   // Startup always runs a full crawl (see Run), which is the source of truth
@@ -48,9 +69,9 @@ bool Writer::Start(std::string* err) {
   watcher_ = std::make_unique<FsWatcher>(
       roots_,
       [this](const std::string& path, uint64_t id) {
-        Enqueue({WriteCommand::Kind::kExaminePath, path, id});
+        Enqueue({WriteCommand::Kind::kExaminePath, path, id, nullptr});
       },
-      [this]() { Enqueue({WriteCommand::Kind::kFullRescan, {}, 0}); });
+      [this]() { Enqueue({WriteCommand::Kind::kFullRescan, {}, 0, nullptr}); });
   if (!watcher_->Start(FsWatcher::kSinceNow)) {
     std::fprintf(stderr,
                  "macassistd: FSEvents watcher failed to start; "
@@ -60,7 +81,9 @@ bool Writer::Start(std::string* err) {
 }
 
 void Writer::Stop() {
-  if (watcher_) watcher_->Stop();  // no more enqueues after this
+  if (watcher_) watcher_->Stop();    // no more kExaminePath enqueues
+  if (extractor_) extractor_->Stop();  // stop + join before draining ends,
+                                       // so no more kApplyExtract enqueues
   stop_.store(true);
   cv_.notify_all();  // wake the drain/reconcile loop in Run()
 }
@@ -96,6 +119,9 @@ void Writer::RunFullCrawl(Indexer& idx, const char* reason) {
   std::fprintf(stderr,
                "macassistd: %s sweep done -- %lld scanned, %lld indexed\n",
                reason, status_.scanned.load(), status_.indexed.load());
+  // The crawl flagged new/changed files for extraction and the extractor was
+  // parked while sweeping; wake it to drain the fresh backlog.
+  if (extractor_) extractor_->Notify();
 }
 
 void Writer::ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch) {
@@ -112,21 +138,36 @@ void Writer::ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch) {
   std::string err;
   if (rescan) {
     // A drop/overflow was reported: a full crawl supersedes the per-path
-    // commands in this batch (it re-examines everything).
+    // commands in this batch (it re-examines everything). Any kApplyExtract
+    // results in this batch are dropped -- harmless, those rows stay flagged
+    // and are re-extracted on the next pass.
     RunFullCrawl(idx, "rescan");
   } else {
-    // Per-path reconcile: stat each path; present -> upsert, gone -> tombstone.
-    // New files get the last completed generation so the next full pass does
-    // not mistake them for stale.
+    // Mixed batch: per-path reconciles (stat -> upsert or tombstone) and
+    // applied extraction results, in one transaction. New files get the last
+    // completed generation so the next full pass does not mistake them for
+    // stale.
     const long long gen = idx.ReadGen();
+    long long applied = 0;
     db_->Exec("BEGIN", &err);
     for (const auto& c : batch) {
+      if (c.kind == WriteCommand::Kind::kApplyExtract) {
+        if (c.extract) {
+          idx.ApplyExtraction(*c.extract);
+          ++applied;
+        }
+        continue;
+      }
       const long long root_id = RootIdForPath(idx, c.path);
       if (idx.UpsertFile(c.path, root_id, gen) == Indexer::Result::kMissing) {
         idx.TombstoneByPath(c.path);
       }
     }
     db_->Exec("COMMIT", &err);
+    extract_status_.extracted.fetch_add(applied, std::memory_order_relaxed);
+    // Flags were just cleared (extraction) and/or set (upserts); let the
+    // extractor pull the next batch or newly stale files.
+    if (extractor_) extractor_->Notify();
   }
   if (max_id != 0) {
     db_->SetMeta("fsevents_last_id", std::to_string(max_id), &err);

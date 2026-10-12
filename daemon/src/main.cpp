@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
   std::string db_path = macassist::DefaultDbPath();
   std::vector<std::string> roots;
   long long reconcile_secs = 86400;  // 24h default (--reconcile-interval)
+  bool pretend_battery = false;      // hidden dev flag (--pretend-battery)
 
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -55,6 +56,8 @@ int main(int argc, char** argv) {
       roots.push_back(next("--root"));
     } else if (a == "--reconcile-interval") {
       reconcile_secs = std::atoll(next("--reconcile-interval").c_str());
+    } else if (a == "--pretend-battery") {
+      pretend_battery = true;  // force on-battery extraction policy for testing
     } else {
       std::fprintf(stderr, "macassistd: unknown argument: %s\n", a.c_str());
       return 2;
@@ -71,7 +74,8 @@ int main(int argc, char** argv) {
   // long-lived thread. Start() opens + migrates synchronously (so the reader
   // opens against a finished schema), then launches the background crawl.
   macassist::Writer writer(db_path, roots,
-                           std::chrono::seconds(reconcile_secs));
+                           std::chrono::seconds(reconcile_secs),
+                           pretend_battery);
   if (!writer.Start(&err)) {
     std::fprintf(stderr, "macassistd: open index %s failed: %s\n",
                  db_path.c_str(), err.c_str());
@@ -89,7 +93,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  macassist::RequestRouter router(*rdb, writer.status());
+  macassist::RequestRouter router(*rdb, writer.status(),
+                                  writer.extract_status());
   macassist::SocketServer server(
       socket_path,
       [&router](const std::string& req) { return router.Handle(req); });

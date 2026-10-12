@@ -13,12 +13,12 @@ See `PLAN.md` for the full design and rationale.
 | Phase | Scope | Status |
 |---|---|---|
 | **Phase 1** | Vertical slice: hotkey → panel → daemon → filename FTS → open | ✅ Done (on `main`) |
-| **Phase 2** | Real indexing: live sweeper + content extraction | 🚧 In progress — bricks 1–4 of 6 done |
+| **Phase 2** | Real indexing: live sweeper + content extraction | 🚧 In progress — bricks 1–5 of 6 done |
 | **Phase 3** | Intelligence: AFM `SearchIntent` + CoreML embeddings + two-stage query | ⬜ Not started |
 | **Phase 4** | Product polish: settings, onboarding, launchd, signing/notarization/DMG | ⬜ Not started |
 | **Phase 5** | Stretch: voice, transcription, chunked embeddings, auto-open | ⬜ Not started |
 
-**Current branch:** `phase2-indexing` (pushed to `origin`). **Schema version:** v3.
+**Current branch:** `phase2-indexing` (pushed to `origin`). **Schema version:** v4.
 
 ---
 
@@ -29,14 +29,14 @@ See `PLAN.md` for the full design and rationale.
 |---|---|---|
 | `ipc/socket_server` | Unix-socket accept loop, length-prefixed JSON frames | ✅ works (single-threaded, one conn at a time) |
 | `ipc/request_router` | Routes `ping`/`status`/`query`; reads live sweep status | ✅ (`action`/`reindex`/`config` ⬜ not implemented) |
-| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v3, writer/reader split |
+| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v4, writer/reader split |
 | `sweep/crawler` | Full incremental walk (upsert + fingerprint-skip + tombstone) | ✅ |
 | `sweep/indexer` | Shared per-file upsert / tombstone (cached statements) | ✅ |
 | `sweep/writer` | Long-lived writer thread: owns RW conn, runs crawl + periodic reconciliation, drains command queue | ✅ |
 | `sweep/fs_watcher` | FSEvents live updates (ObjC++/`.mm`, GCD dispatch queue) | ✅ |
 | `sweep/politeness` | Thermal (NSProcessInfo) + battery (IOKit) sensors; crawl throttle under thermal pressure | ✅ |
-| `query/query_engine` | FTS5 BM25 over name + path tokens; excludes tombstones | ✅ (content/tags cols empty until brick 5) |
-| `extract/` | ObjC++ bridges: PDFKit text, media tags, (later OCR) | ⬜ brick 5 |
+| `query/query_engine` | FTS5 BM25 over name + path + content + tags; **direct name matches tiered above content-only**; excludes tombstones | ✅ (content/tags filled by brick 5) |
+| `extract/` | Extractor thread (own RO conn, lock-step) + bridges: plain text, PDFKit, ImageIO/AVFoundation tags | ✅ brick 5 (OCR + office docs → Phase 2.5) |
 | `ai/` | Swift interop: AFM session, CoreML embedder | ⬜ Phase 3 |
 
 ### App — `MacAssist.app` (Swift, SwiftPM)
@@ -83,23 +83,42 @@ hits. Daemon did a one-shot stat-only crawl at startup; name-only FTS. (See git 
   reads thermal (`NSProcessInfo`) + battery (IOKit); the crawl pauses under serious/critical
   thermal pressure. **Decided:** startup always runs a full crawl and the watcher uses
   `sinceNow` (no replay) — the crawl is the source of truth for offline changes.
+- **Brick 5 — cheap extraction** (branch; see `BRICK_5.md`). Content/metadata now fill the
+  previously-empty `content`/`tags` FTS columns + the new `file_meta` table. A dedicated
+  `Extractor` thread (third, read-only connection) discovers stale files via an indexed
+  `needs_extract` flag (schema v4), extracts off the writer thread, and funnels results back
+  through the write-command queue as a new `kApplyExtract`. **Lock-step** (one batch in flight)
+  + a **sweeping gate** keep the queue bounded and avoid re-extracting un-applied rows; the
+  writer clears the flag guarded by `fingerprint`, so an edit mid-extraction self-corrects and
+  unsupported/empty/errored files are stamped done (no loop). Bridges: `plain_text.cpp`
+  (txt/md/csv), `pdf_text.mm` (PDFKit), `media_tags.mm` (ImageIO EXIF + AVFoundation tags).
+  On battery the backlog is deferred to AC via an `indexed_at >= now−7d` filter
+  (`--pretend-battery` dev flag). **RTF + office docs + OCR deferred to Phase 2.5.**
+- **Query ranking — name-match tier** (post-brick-5, during testing). `SearchFiles` now tiers a
+  **direct filename match above any content/path-only hit** (`LEFT JOIN` to a name-column match;
+  `name_hit IS NULL` is the primary `ORDER BY` key, bm25 breaks ties within a tier). The tiering
+  is in the `ORDER BY`, so it applies *before* `LIMIT` — a name match can't be truncated out by a
+  pile of content hits. Gotcha learned: **FTS5 `MATCH` rejects a table alias** (`nm MATCH ?` →
+  "no such column: nm"), which silently zeroed results; the derived-table `LEFT JOIN` avoids it.
 
 **Verified** (ad-hoc, via `mactl` + `sqlite3`): fresh crawl indexes all; a re-crawl re-indexes
 only changed/new files and tombstones deletes; and with the daemon **running**, live
-create/delete/rename/modify reflect in query results within ~2s.
+create/delete/rename/modify reflect in query results within ~2s. **Brick 5:** on a throwaway
+corpus, body-text (txt/md/csv), PDF text-layer, EXIF camera model, and audio title/artist/album
+tokens all hit; `file_meta` holds typed dimensions/duration/artist; `pending` drains to 0 incl.
+deferred `.rtf` (stamped, not looped); editing a file re-extracts within ~2s; and on battery an
+old-`indexed_at` file stays deferred while fresh files extract.
 
 ---
 
 ## What's next
 
 ### Phase 2 remaining
-- **Brick 5 — cheap extraction.** Worker pool (second queue producer) + ObjC++ bridges for
-  PDF text (PDFKit), plain text, and media tags (AVFoundation/EXIF/ID3) → fill the empty
-  `content`/`tags` FTS columns + `file_meta`. Honor PLAN §3 caps. Reuses `Politeness` and adds
-  the battery-aware pausing of heavy extraction that brick 4 deferred. **Vision OCR and
-  office-doc (docx/pages) parsing are deferred to Phase 2.5** (OCR is the thermal/latency risk).
 - **Brick 6 — fixture corpus + tests.** Turn the ad-hoc shell checks into a real
   Catch2/GoogleTest suite + a golden-query set.
+- **Phase 2.5 (follow-on):** Vision OCR for image-only PDFs/images; office-doc (docx/pages)
+  and RTF text extraction — the parsers brick 5 deferred. These re-trigger extraction via the
+  schema-bump nuke-rebuild.
 
 ### Beyond Phase 2
 - **Phase 3 (intelligence):** Swift interop layer, AFM `SearchIntent` guided generation
@@ -122,19 +141,61 @@ create/delete/rename/modify reflect in query results within ~2s.
 ./build/daemon/macassistd
 
 # Dev loop against a throwaway corpus — keep the socket path short (< ~104 chars).
-# --reconcile-interval <secs> overrides the 24h default (use a few secs to watch reconciles):
+# --reconcile-interval <secs> overrides the 24h default (use a few secs to watch reconciles).
+# --pretend-battery forces the on-battery extraction policy (defers the >7d-old backlog):
 ./build/daemon/macassistd --socket /tmp/dev.sock --db /tmp/dev.db --root /path/to/corpus \
-    --reconcile-interval 2
-./build/tools/mactl/mactl --socket /tmp/dev.sock status
+    --reconcile-interval 2 [--pretend-battery]
+./build/tools/mactl/mactl --socket /tmp/dev.sock status   # watch pending -> 0
 ./build/tools/mactl/mactl --socket /tmp/dev.sock query resume
 ```
 
 ---
 
 ## Known caveats
+
+### Indexing / search coverage
+- **Office docs (`docx`/`doc`/`pptx`/`xlsx`/`pages`/`key`), `rtf` are name-only.** They are
+  crawled and findable by **filename + folder path**, but their **body text is NOT extracted**
+  (the extractor has no bridge for them) — they're stamped `needs_extract=0` so they don't loop.
+  Real content extraction is **Phase 2.5**. Searching a phrase that only lives *inside* a `.docx`
+  will miss it.
+- **OCR deferred to Phase 2.5** — scanned/image-only PDFs have no text layer, so they index with
+  empty `content` (name-searchable only).
+- **Extraction caps (PLAN §3):** text/PDF bodies capped at 100 KB; PDFs at 200 pages; image/AV
+  metadata is a curated subset (dimensions, camera make/model, duration, title/artist/album).
+
+### Extraction engine — things to remember
+- **`pending` is the durable truth; `extractedFiles` is not.** `extractedFiles` is an in-memory
+  counter that **resets to 0 on daemon restart** (it counts applies since process start). To know
+  if extraction is complete, watch `pending → 0` in `mactl status`.
+- **Schema bump = nuke-and-rebuild.** Any `kSchemaVersion` change (pre-release policy) drops all
+  tables and re-crawls + re-extracts from scratch. Currently **v4**. This is how Phase 2.5
+  parsers will re-trigger extraction on existing files.
+- **On battery, the old backlog is deferred** (`indexed_at >= now−7d`); only recently-encountered
+  files stay current until AC. Freshly-touched/created files still extract on battery. The
+  "drains when plugged in" half can't be exercised on battery-only hardware; use
+  `--pretend-battery` to force the on-battery path for testing.
+- **No per-file extraction timeout** (single extractor thread) — a pathological PDF could stall
+  the backlog. Page/size caps are the only mitigation; subprocess isolation is a later hardening.
+- **`CoreGraphics PDF has logged an error`** in the daemon log is harmless noise from PDFKit
+  parsing a malformed PDF; our code treats it as empty content and moves on.
+
+### Dev workflow gotchas
+- **Quit the old app before relaunching.** `scripts/make-app.sh` does `rm -rf` on the `.app`
+  bundle and rebuilds it; a still-running instance keeps the old (now-deleted) binary, and `open`
+  on the rebuilt bundle just **reactivates the stale instance** (same bundle id
+  `com.finn.macassist`) rather than launching fresh — which can leave the menu-bar status item in
+  a bad state. `pkill -x MacAssist` first, then `open`.
+- **Restarting the daemon does NOT require a re-crawl unless the schema changed.** Query-side
+  changes (e.g. ranking) just need a rebuild + restart; the index persists (WAL files alongside
+  `index.db`).
+- **FTS5 `MATCH` rejects a table alias** — use the table name or a derived table, never
+  `alias MATCH ?` (fails to prepare → silent empty results).
 - **Socket path ≤ ~104 chars** (`sockaddr_un` limit) — dev sockets must live in `/tmp`, not the
   long scratchpad path.
-- **Menu-bar icon can hide behind the notch** on crowded menu bars (environmental, not a bug).
-- **OCR + office docs deferred to Phase 2.5** — scanned/image-only PDFs won't have searchable
-  text until then.
+- **Menu-bar icon can hide behind the notch** on crowded menu bars (environmental, not a bug);
+  ⌘-drag menu-bar items to pull it out.
+
+### Not yet built
 - **No launchd agent yet** — the daemon is launched manually (Phase 4).
+- **`action`/`reindex`/`config` IPC** not implemented (router handles `ping`/`status`/`query`).

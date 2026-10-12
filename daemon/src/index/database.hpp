@@ -51,6 +51,10 @@ class Database {
   // Count of present (non-tombstoned) files (0 on error).
   long long CountFiles();
 
+  // Count of present files still awaiting content extraction (0 on error).
+  // Backed by the partial index on needs_extract, so it stays cheap.
+  long long CountPending();
+
   // Reads meta[key]; returns "" if absent or on error.
   std::string GetMeta(const std::string& key);
   // Upserts meta[key]=value. Returns false and sets *err on failure.

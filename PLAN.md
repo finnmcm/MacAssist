@@ -91,7 +91,10 @@ CREATE TABLE files (
   indexed_at INT,
   fingerprint TEXT,                    -- mtime:size, to skip unchanged files
   missing INT DEFAULT 0,               -- tombstone until reconciliation confirms
-  seen_gen INT DEFAULT 0);             -- crawl generation last seen (mark-and-sweep)
+  seen_gen INT DEFAULT 0,              -- crawl generation last seen (mark-and-sweep)
+  needs_extract INT NOT NULL DEFAULT 1);-- 1 = body/metadata not yet extracted
+  -- partial index CREATE INDEX ... ON files(id) WHERE needs_extract=1 makes the
+  -- extractor's "what's still stale?" poll O(pending) rather than a full scan.
 
 -- keyword search: filename tokens, extracted text, media tags flattened.
 -- Standalone FTS5 (not external-content): stores the indexed text once and
@@ -112,6 +115,13 @@ CREATE VIRTUAL TABLE file_vec USING vec0(
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
   -- keys in use: schema_version, crawl_gen, fsevents_last_id (+ stats later)
 ```
+
+**Current schema state (v4):** `files`, `file_text` (name/path_tokens/content/tags),
+`file_meta`, `roots`, `exclusions`, `meta` are all created and populated. `file_vec` is **not
+yet created** — it lands in Phase 3 with embeddings. `content`/`tags`/`file_meta` are filled by
+the Brick-5 extractor for text/PDF/media; office docs, `rtf`, and OCR are name-only until Phase
+2.5 (schema-version bumps nuke-and-rebuild, which re-extracts everything, so those parsers
+re-trigger automatically when added).
 
 Extraction caps (v1): documents — first 100 KB of text into FTS; OCR — skip images
 > 20 MP, cap OCR output at 10 KB; one embedding vector per file (chunked embeddings are a
@@ -158,6 +168,14 @@ prompt-injection-prone free text):
    (dominant — `open my_photo.png` must win), recency decay, root/kind priors.
 4. If `exactFilename` matches uniquely, short-circuit to it.
 
+**Implemented in Phase 2 (FTS-only path, pre-fusion):** the "filename dominates" boost already
+exists in `query/query_engine`. Results are two-tiered — a **direct name-column match ranks
+above any content/path-only hit** (a `LEFT JOIN` to a name-only FTS match; `name_hit IS NULL` is
+the primary `ORDER BY` key, bm25 with name>path>tags>content weights breaks ties within a tier).
+The tiering is in the `ORDER BY`, so it applies *before* `LIMIT` — a strong pile of content hits
+can't bump a filename match off the list. (Implementation note: FTS5 `MATCH` rejects a table
+alias, so the name-only match is a derived table, not `alias MATCH ?`.)
+
 **AFM latency discipline:** the daemon keeps one prewarmed `LanguageModelSession`
 (instructions preloaded) so per-query cost is generation only. If AFM is unavailable
 (model downloading, Apple Intelligence off), Stage A results stand alone and the panel
@@ -198,10 +216,16 @@ WAL*, never by an application-level lock over the database:
   extraction batch never blocks a query. A `std::shared_mutex` over the DB is explicitly
   rejected: redundant with WAL, and it would reintroduce exactly the reader-blocks-on-writer
   stall WAL removes, hurting the ≤1.5 s query path.
-- **Extraction workers are DB-free.** The worker pool (N = performance cores / 2, ⚙) pulls
-  paths from a **job queue**, runs only CPU/IO-bound extraction, and posts finished payloads
-  as apply-extraction commands onto the writer's command queue. All writes stay on one
-  connection — no competing writers, no `SQLITE_BUSY` churn.
+- **Extraction reads on its own connection; all writes stay on the writer.** The extractor
+  posts finished payloads as apply-extraction commands onto the writer's command queue, so all
+  writes stay on one connection — no competing writers, no `SQLITE_BUSY` churn.
+  **As built (Brick 5, refines the original "worker pool + push job queue" sketch):** a
+  **single** extractor thread with its **own read-only connection** *pulls* stale files from the
+  DB (`WHERE needs_extract=1`, indexed) rather than having the crawler push a job queue — durable
+  and crash-resumable (the flag is the queue). It runs **lock-step** (one batch in flight, waits
+  for the writer to apply before pulling again, bounding queue memory) and is **gated on
+  `sweeping`** (parks during a full crawl, since the writer can't drain applied results
+  mid-crawl). A multi-thread pool is the upgrade path *if* single-thread throughput disappoints.
 - **Primitives.** Both queues are `mutex` + `condition_variable` (producer/consumer — every
   access mutates, so no rwlock). Status counters read by the `status` IPC (`indexedFiles`,
   `sweeping`, progress) are `std::atomic`. In-memory config, *if* ever cached rather than
@@ -212,11 +236,17 @@ Pipeline:
 - **Initial crawl:** breadth-first per root, honoring exclusions (default globs:
   `node_modules`, `.git`, `*.app`, caches, `~/Library`). Stat-only pass populates `files`
   fast (searchable by name within seconds); extraction jobs queue behind it.
-- **Extraction workers:** thread pool (N = performance cores / 2, ⚙) pulling from a
-  priority job queue — recently modified files first. Each worker: type dispatch → extract →
-  hand the payload to the writer, which commits `files`, `file_text`, `file_meta`,
-  `file_vec` in one transaction (fingerprint-skip for unchanged files is decided on the
-  writer). Embedding batched (CoreML likes batches).
+- **Extraction (as built, Brick 5):** one extractor thread pulls stale files
+  (`needs_extract=1`, freshest `indexed_at` first) on its own read-only connection, dispatches by
+  type → extract → hands the payload to the writer, which writes `file_text.content`/`tags` +
+  `file_meta` and clears `needs_extract` **guarded by `fingerprint`** (a file edited
+  mid-extraction stays flagged → re-extracted; unsupported/empty/errored files are stamped done
+  so nothing loops) in one transaction. Scope: plain text (`txt/md/csv`), PDF text (PDFKit),
+  image EXIF + audio/video tags (ImageIO/AVFoundation). **Office docs, `rtf`, OCR → Phase 2.5.**
+  Caps per PLAN §3 (100 KB / 200 pages). Embedding batching is Phase 3 (`file_vec` not yet made).
+- **Extraction politeness:** extractor thread at `QOS_CLASS_UTILITY`; pauses under thermal
+  pressure; on battery defers the backlog (`indexed_at >= now−7d`) so only recently-encountered
+  files stay current until AC (`--pretend-battery` dev flag forces this path).
 - **Live updates:** one FSEvents stream over all roots, 2 s latency coalescing. Events
   enqueue re-stat → re-extract if fingerprint changed; deletes set `missing=1`
   (purged at reconciliation).
@@ -314,6 +344,8 @@ is the thermal risk and can't finish during the crawl). Fixture corpus + tests.
 within seconds and survives restarts; (crawl speed) a 50k-file stat pass makes filenames
 searchable in minutes; (content) extracted text/tags fill in progressively in the background
 without blocking search.*
+*Status: sweeper + FSEvents + reconciliation + politeness + cheap extraction all implemented
+(bricks 1–5); fixture corpus + test suite (brick 6) remain. See `PROGRESS.md`.*
 
 **Phase 3 — Intelligence.**
 Swift interop layer; AFM `SearchIntent` guided generation with prewarmed session; CoreML

@@ -6,7 +6,7 @@
 namespace macassist {
 namespace {
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 // Reads meta.schema_version; returns 0 if the meta table or row is absent
 // (e.g. a brand-new database), which forces a rebuild to the current schema.
@@ -105,6 +105,16 @@ long long Database::CountFiles() {
              : 0;
 }
 
+long long Database::CountPending() {
+  std::string err;
+  Stmt s(db_,
+         "SELECT count(*) FROM files WHERE missing=0 AND needs_extract=1", &err);
+  if (!s) return 0;
+  return (sqlite3_step(s.get()) == SQLITE_ROW)
+             ? sqlite3_column_int64(s.get(), 0)
+             : 0;
+}
+
 std::string Database::GetMeta(const std::string& key) {
   std::string err;
   Stmt s(db_, "SELECT value FROM meta WHERE key=?1", &err);
@@ -144,6 +154,7 @@ bool Database::Migrate(std::string* err) {
   static const char* kRebuild = R"SQL(
     BEGIN;
     DROP TABLE IF EXISTS file_text;
+    DROP TABLE IF EXISTS file_meta;
     DROP TABLE IF EXISTS files;
     DROP TABLE IF EXISTS roots;
     DROP TABLE IF EXISTS exclusions;
@@ -165,9 +176,21 @@ bool Database::Migrate(std::string* err) {
       created_at INTEGER, modified_at INTEGER, indexed_at INTEGER,
       fingerprint TEXT,
       missing INTEGER NOT NULL DEFAULT 0,
-      seen_gen INTEGER NOT NULL DEFAULT 0);
+      seen_gen INTEGER NOT NULL DEFAULT 0,
+      needs_extract INTEGER NOT NULL DEFAULT 1);
+    -- Partial index so the extractor's "what's still stale?" poll is
+    -- O(pending), not a scan of every indexed file (brick 5).
+    CREATE INDEX idx_files_needs_extract ON files(id) WHERE needs_extract=1;
     CREATE VIRTUAL TABLE file_text USING fts5(
       name, path_tokens, content, tags, tokenize='unicode61');
+    -- Typed media metadata (duration, dimensions, artist...) for display and
+    -- later filtering; the same values are flattened into file_text.tags for
+    -- search. file_id == files.id.
+    CREATE TABLE file_meta(
+      file_id INTEGER NOT NULL REFERENCES files(id),
+      key TEXT NOT NULL,
+      value TEXT,
+      PRIMARY KEY(file_id, key));
     COMMIT;
   )SQL";
   if (!Exec(kRebuild, err)) return false;

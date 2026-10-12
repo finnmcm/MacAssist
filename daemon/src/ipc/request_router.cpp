@@ -47,6 +47,8 @@ std::string RequestRouter::Handle(const std::string& request_json) {
                 {"type", msg::kStatus},
                 {"id", id},
                 {"indexedFiles", db_.CountFiles()},
+                {"extractedFiles", extract_status_.extracted.load()},
+                {"pending", db_.CountPending()},
                 {"sweeping", status_.sweeping.load()},
                 {"scanned", status_.scanned.load()},
                 {"afmAvailable", false}}

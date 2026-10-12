@@ -8,6 +8,7 @@
 #include <ctime>
 #include <filesystem>
 
+#include "extract/text_extractors.hpp"
 #include "index/file_kind.hpp"
 
 namespace fs = std::filesystem;
@@ -47,9 +48,12 @@ Indexer::Indexer(Database& db) : db_(db) {
                 "INSERT INTO file_text(rowid,name,path_tokens,content,tags)"
                 " VALUES(?1,?2,?3,'','')",
                 &err);
+  // A fingerprint change re-flags the file for extraction (needs_extract=1);
+  // the extractor will refresh its content/tags/meta.
   upd_ = Stmt(db_.handle(),
               "UPDATE files SET size=?1,created_at=?2,modified_at=?3,"
-              " indexed_at=?4,fingerprint=?5,missing=0,seen_gen=?6 WHERE id=?7",
+              " indexed_at=?4,fingerprint=?5,missing=0,seen_gen=?6,"
+              " needs_extract=1 WHERE id=?7",
               &err);
   touch_ = Stmt(db_.handle(),
                 "UPDATE files SET missing=0,seen_gen=?1 WHERE id=?2", &err);
@@ -62,8 +66,23 @@ Indexer::Indexer(Database& db) : db_(db) {
   ins_root_ =
       Stmt(db_.handle(), "INSERT OR IGNORE INTO roots(path) VALUES(?1)", &err);
   sel_root_ = Stmt(db_.handle(), "SELECT id FROM roots WHERE path=?1", &err);
+  // Extraction apply path (brick 5).
+  updft_ = Stmt(db_.handle(),
+                "UPDATE file_text SET content=?1,tags=?2 WHERE rowid=?3", &err);
+  del_meta_ =
+      Stmt(db_.handle(), "DELETE FROM file_meta WHERE file_id=?1", &err);
+  ins_meta_ = Stmt(db_.handle(),
+                   "INSERT INTO file_meta(file_id,key,value) VALUES(?1,?2,?3)",
+                   &err);
+  // Guarded clear: only mark extracted if the fingerprint still matches what
+  // the extractor saw, so a file edited mid-extraction stays flagged.
+  clear_extract_ = Stmt(db_.handle(),
+                        "UPDATE files SET needs_extract=0 "
+                        "WHERE id=?1 AND fingerprint=?2",
+                        &err);
   valid_ = sel_ && ins_ && insft_ && upd_ && touch_ && tomb_path_ &&
-           tomb_stale_ && ins_root_ && sel_root_;
+           tomb_stale_ && ins_root_ && sel_root_ && updft_ && del_meta_ &&
+           ins_meta_ && clear_extract_;
 }
 
 long long Indexer::EnsureRoot(const std::string& root) {
@@ -156,6 +175,38 @@ Indexer::Result Indexer::UpsertFile(const std::string& path, long long root_id,
   sqlite3_bind_int64(s, 2, existing_id);
   sqlite3_step(s);
   return Result::kUnchanged;
+}
+
+void Indexer::ApplyExtraction(const ExtractResult& r) {
+  // Body text + flattened tags into the FTS row (name/path_tokens preserved).
+  sqlite3_stmt* ft = updft_.get();
+  sqlite3_reset(ft);
+  sqlite3_bind_text(ft, 1, r.content.c_str(), static_cast<int>(r.content.size()),
+                    SQLITE_TRANSIENT);
+  sqlite3_bind_text(ft, 2, r.tags.c_str(), static_cast<int>(r.tags.size()),
+                    SQLITE_TRANSIENT);
+  sqlite3_bind_int64(ft, 3, r.file_id);
+  sqlite3_step(ft);
+
+  // Replace the typed metadata rows for this file.
+  sqlite3_reset(del_meta_.get());
+  sqlite3_bind_int64(del_meta_.get(), 1, r.file_id);
+  sqlite3_step(del_meta_.get());
+  for (const auto& kv : r.meta) {
+    sqlite3_stmt* m = ins_meta_.get();
+    sqlite3_reset(m);
+    sqlite3_bind_int64(m, 1, r.file_id);
+    sqlite3_bind_text(m, 2, kv.first.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(m, 3, kv.second.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(m);
+  }
+
+  // Clear the flag only if the file hasn't changed since the extractor read it.
+  sqlite3_stmt* c = clear_extract_.get();
+  sqlite3_reset(c);
+  sqlite3_bind_int64(c, 1, r.file_id);
+  sqlite3_bind_text(c, 2, r.fingerprint.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_step(c);
 }
 
 void Indexer::TombstoneByPath(const std::string& path) {

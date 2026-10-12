@@ -18,6 +18,7 @@ bool Politeness::UnderThermalPressure() const {
 }
 
 bool Politeness::OnBattery() const {
+  if (pretend_battery_) return true;  // --pretend-battery dev override
   CFTypeRef info = IOPSCopyPowerSourcesInfo();
   if (info == nullptr) return false;
   // The "providing" source is the one currently powering the machine; owned by

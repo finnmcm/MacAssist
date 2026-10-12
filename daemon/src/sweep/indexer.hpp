@@ -5,6 +5,8 @@
 
 namespace macassist {
 
+struct ExtractResult;
+
 // Owns the prepared statements and the per-file upsert / tombstone logic
 // shared by the full crawl and the FSEvents handler. Lives on and is used
 // only by the writer thread, so it is deliberately not thread-safe.
@@ -26,6 +28,12 @@ class Indexer {
   // tombstone it); kSkipped means it exists but is not an indexed file.
   Result UpsertFile(const std::string& path, long long root_id, long long gen);
 
+  // Apply an extraction result: write content/tags into the FTS row, replace
+  // the file's file_meta rows, and clear needs_extract -- but only if the
+  // file's fingerprint still matches the one the extractor saw (otherwise the
+  // file changed mid-extraction and stays flagged for a re-run).
+  void ApplyExtraction(const ExtractResult& r);
+
   // Mark one path missing (a delete / move-away observed live).
   void TombstoneByPath(const std::string& path);
 
@@ -44,6 +52,7 @@ class Indexer {
   bool valid_ = false;
   Stmt sel_, ins_, insft_, upd_, touch_, tomb_path_, tomb_stale_;
   Stmt ins_root_, sel_root_;
+  Stmt updft_, del_meta_, ins_meta_, clear_extract_;
 };
 
 }  // namespace macassist
