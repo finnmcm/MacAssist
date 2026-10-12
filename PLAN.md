@@ -90,11 +90,14 @@ CREATE TABLE files (
   size INT, created_at INT, modified_at INT,
   indexed_at INT,
   fingerprint TEXT,                    -- mtime:size, to skip unchanged files
-  missing INT DEFAULT 0);              -- tombstone until reconciliation confirms
+  missing INT DEFAULT 0,               -- tombstone until reconciliation confirms
+  seen_gen INT DEFAULT 0);             -- crawl generation last seen (mark-and-sweep)
 
--- keyword search: filename tokens, extracted text, media tags flattened
+-- keyword search: filename tokens, extracted text, media tags flattened.
+-- Standalone FTS5 (not external-content): stores the indexed text once and
+-- supports snippet()/highlight() for previews; rowid == files.id.
 CREATE VIRTUAL TABLE file_text USING fts5(
-  name, path_tokens, content, tags, content=''  /* external-content pattern */);
+  name, path_tokens, content, tags, tokenize='unicode61');
 
 -- typed metadata (EXIF, ID3, dimensions, duration, artist, album, camera…)
 CREATE TABLE file_meta (
@@ -106,7 +109,8 @@ CREATE TABLE file_meta (
 CREATE VIRTUAL TABLE file_vec USING vec0(
   file_id INTEGER PRIMARY KEY, embedding FLOAT[384]);
 
-CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);  -- schema_version, stats
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+  -- keys in use: schema_version, crawl_gen, fsevents_last_id (+ stats later)
 ```
 
 Extraction caps (v1): documents — first 100 KB of text into FTS; OCR — skip images
@@ -283,10 +287,13 @@ MacAssist/
   scripts/           # dev bootstrap, corpus generator, latency bench
 ```
 
-Build: **Xcode workspace** — mixed Swift/ObjC++/C++ single-binary targets are what Xcode's
-Swift↔C++ interop mode (`SWIFT_OBJC_INTEROP_MODE` / C++ interop setting) is built for;
-CMake fights this. Vendored deps: SQLite (custom build with FTS5), `sqlite-vec`, JSON lib
-(nlohmann ⚙), embedding model as a compiled `.mlmodelc` resource.
+Build (current): the daemon + `mactl` build with **CMake** (C++20; the `.mm` FSEvents bridge
+compiles as ObjC++/ARC with CoreServices linked), and the Swift app builds with **SwiftPM**.
+The two are independent and meet only over the socket protocol. The **Xcode-workspace
+migration is deferred to Phase 3**, when Swift↔C++ interop for AFM/CoreML
+(`SWIFT_OBJC_INTEROP_MODE`) forces a single mixed-language binary — CMake fights that, but
+handles today's C++/ObjC++ daemon fine. Vendored deps: SQLite (custom build with FTS5),
+`sqlite-vec`, JSON lib (nlohmann ⚙), embedding model as a compiled `.mlmodelc` resource.
 
 ---
 
