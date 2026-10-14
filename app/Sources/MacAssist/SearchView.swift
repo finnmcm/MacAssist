@@ -15,6 +15,7 @@ struct SearchView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchField
+            toolbar
 
             if !model.results.isEmpty {
                 Divider()
@@ -40,6 +41,10 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .font(.system(size: 17, weight: .medium))
+            // Active filters render as chips to the left of the cursor.
+            ForEach(model.activeFilters) { filter in
+                FilterChip(filter: filter) { model.remove(filter) }
+            }
             TextField("Search your files…", text: $model.queryText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 20, weight: .regular))
@@ -47,6 +52,63 @@ struct SearchView: View {
         }
         .padding(.horizontal, 18)
         .frame(height: PanelMetrics.fieldHeight)
+    }
+
+    // Always-visible row of broad filter toggles. Labels are display-only; the
+    // canonical daemon kind travels in the Filter (see SearchModel.Filter).
+    private var toolbar: some View {
+        HStack(spacing: 8) {
+            toolbarButton("Recently downloaded", .recentlyDownloaded)
+            toolbarButton("Photos", .kind("image"))
+            toolbarButton("Videos", .kind("video"))
+            toolbarButton("Music", .kind("audio"))
+            toolbarButton("Documents", .kind("document"))
+            tagsMenu
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: PanelMetrics.toolbarHeight)
+    }
+
+    private func toolbarButton(_ label: String, _ filter: Filter) -> some View {
+        let active = model.isActive(filter)
+        return Text(label)
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule().fill(active ? Color.accentColor
+                                      : Color.secondary.opacity(0.15)))
+            .foregroundStyle(active ? Color.white : Color.primary)
+            .contentShape(Capsule())
+            .onTapGesture { model.toggle(filter) }
+    }
+
+    // "Tags ▾": a menu of the 7 Finder colors; each pick toggles a tag chip.
+    private var tagsMenu: some View {
+        Menu {
+            ForEach(1...7, id: \.self) { color in
+                Button {
+                    model.toggle(.tag(color: color))
+                } label: {
+                    Label(FilterLabels.colorName(color),
+                          systemImage: model.isActive(.tag(color: color))
+                              ? "checkmark" : "circle.fill")
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text("Tags")
+                Image(systemName: "chevron.down").font(.system(size: 8))
+            }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     private var resultsList: some View {
@@ -175,6 +237,67 @@ private struct TagDots: View {
         case 6: return .red
         case 7: return .orange
         default: return nil
+        }
+    }
+}
+
+// A removable capsule for one active filter, rendered inside the search field.
+// Tapping anywhere on it (including the ×) removes the filter.
+private struct FilterChip: View {
+    let filter: Filter
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if case .tag(let c) = filter, let color = TagDots.color(for: c) {
+                Circle().fill(color).frame(width: 8, height: 8)
+            }
+            Text(FilterLabels.text(filter))
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+            Image(systemName: "xmark")
+                .font(.system(size: 8, weight: .bold))
+                .opacity(0.7)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(Color.accentColor.opacity(0.22)))
+        .contentShape(Capsule())
+        .onTapGesture(perform: onRemove)
+    }
+}
+
+// Human-facing labels for filters. The daemon only ever sees canonical kinds
+// (image|audio|video|document); these map them back for chips and menu items.
+private enum FilterLabels {
+    static func text(_ filter: Filter) -> String {
+        switch filter {
+        case .recentlyDownloaded: return "Downloaded"
+        case .kind(let k): return kindLabel(k)
+        case .tag(let c): return colorName(c)
+        }
+    }
+
+    static func kindLabel(_ kind: String) -> String {
+        switch kind {
+        case "image": return "Photos"
+        case "video": return "Videos"
+        case "audio": return "Music"
+        case "document": return "Documents"
+        default: return kind.capitalized
+        }
+    }
+
+    static func colorName(_ color: Int) -> String {
+        switch color {
+        case 1: return "Gray"
+        case 2: return "Green"
+        case 3: return "Purple"
+        case 4: return "Blue"
+        case 5: return "Yellow"
+        case 6: return "Red"
+        case 7: return "Orange"
+        default: return "Tag"
         }
     }
 }

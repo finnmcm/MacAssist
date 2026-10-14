@@ -20,7 +20,19 @@ enum Proto {
     }
 }
 
-// A query request: {"v":1,"id":N,"type":"query","text":...,"stage":...}.
+// The filter-toolbar selections sent with a query. `kinds` are canonical file
+// kinds (image|audio|video|document), never UI labels. Omitted/empty on the
+// wire reproduces the pre-toolbar behavior, so the daemon stays back-compatible.
+struct QueryFilters: Encodable, Equatable {
+    var kinds: [String] = []
+    var tagColors: [Int] = []
+    var downloaded: Bool = false
+
+    var isEmpty: Bool { kinds.isEmpty && tagColors.isEmpty && !downloaded }
+}
+
+// A query request:
+// {"v":1,"id":N,"type":"query","text":...,"stage":...,"filters":{…}}.
 struct QueryRequest: Encodable {
     let v = Proto.version
     let id: Int
@@ -28,6 +40,7 @@ struct QueryRequest: Encodable {
     let text: String
     let stage: String  // "instant" | "full"
     let limit = 50     // daemon defaults to 5 if omitted; we want the full set
+    let filters: QueryFilters
 }
 
 // A Finder color tag attached to a file. `color` is the Finder label index

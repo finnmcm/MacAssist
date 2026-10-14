@@ -6,7 +6,7 @@
 namespace macassist {
 namespace {
 
-constexpr int kSchemaVersion = 5;
+constexpr int kSchemaVersion = 6;
 
 // Reads meta.schema_version; returns 0 if the meta table or row is absent
 // (e.g. a brand-new database), which forces a rebuild to the current schema.
@@ -181,10 +181,19 @@ bool Database::Migrate(std::string* err) {
       -- Finder color tags as a compact JSON array ([{"name","color"}]);
       -- read on every stat (tag changes don't move the fingerprint). Empty
       -- string / NULL means no tags. Display-only -- not fed into FTS.
-      tags_json TEXT);
+      tags_json TEXT,
+      -- Epoch seconds the file was downloaded (kMDItemDownloadedDate, with the
+      -- com.apple.quarantine xattr as a fast path). NULL = not a download.
+      -- Resolved at insert / on content change; filter+display only, not FTS.
+      downloaded_at INTEGER);
     -- Partial index so the extractor's "what's still stale?" poll is
     -- O(pending), not a scan of every indexed file (brick 5).
     CREATE INDEX idx_files_needs_extract ON files(id) WHERE needs_extract=1;
+    -- Back the empty-text filter-toolbar sort (ORDER BY modified_at / the
+    -- downloaded_at DESC path) so it isn't a full scan at 50k+ files.
+    CREATE INDEX idx_files_modified_at ON files(modified_at);
+    CREATE INDEX idx_files_downloaded_at ON files(downloaded_at)
+      WHERE downloaded_at IS NOT NULL;
     CREATE VIRTUAL TABLE file_text USING fts5(
       name, path_tokens, content, tags, tokenize='unicode61');
     -- Typed media metadata (duration, dimensions, artist...) for display and

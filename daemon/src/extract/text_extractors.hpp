@@ -16,6 +16,7 @@ struct ExtractResult {
   std::string content;  // body text -> file_text.content (<=100 KB)
   std::string tags;     // flattened metadata -> file_text.tags (searchable)
   std::vector<std::pair<std::string, std::string>> meta;  // -> file_meta rows
+  long long downloaded_at = 0;  // epoch secs; 0 = no download signal (not written)
 };
 
 // Each extractor fills `out.content` / `out.tags` / `out.meta` from the file at

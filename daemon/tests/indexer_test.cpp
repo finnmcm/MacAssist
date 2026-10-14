@@ -1,10 +1,13 @@
 #include <catch2/catch.hpp>
 
+#include <sys/xattr.h>
+
 #include <chrono>
 #include <string>
 #include <thread>
 
 #include "db_test_util.hpp"
+#include "extract/download_date.hpp"
 #include "extract/text_extractors.hpp"
 #include "index/database.hpp"
 #include "sweep/indexer.hpp"
@@ -90,6 +93,60 @@ TEST_CASE("UpsertFile inserts, updates on change, skips unchanged",
     CHECK(Scalar(*f.db, "SELECT needs_extract FROM files WHERE path='" + path +
                             "'") == 1);
   }
+}
+
+TEST_CASE("ReadDownloadDate parses the quarantine xattr, else reports none",
+          "[indexer][download]") {
+  TempDir tmp;
+  const std::string dl = (tmp.path() / "report.pdf").string();
+  WriteFile(dl, "downloaded");
+  // flags;hex-epoch;agent;uuid -- 0x5f3e9c40 == 1597938752.
+  const char* q = "0081;5f3e9c40;Safari;ABCDEF01-2345-6789-ABCD-EF0123456789";
+  REQUIRE(setxattr(dl.c_str(), "com.apple.quarantine", q,
+                   std::char_traits<char>::length(q), 0, 0) == 0);
+
+  long long epoch = 0;
+  CHECK(ReadDownloadDate(dl, &epoch));
+  CHECK(epoch == 1597938752);
+
+  const std::string plain = (tmp.path() / "local.txt").string();
+  WriteFile(plain, "not a download");
+  long long none = -1;
+  CHECK_FALSE(ReadDownloadDate(plain, &none));  // no signal -> false, untouched
+  CHECK(none == -1);
+}
+
+TEST_CASE("ApplyExtraction persists a resolved downloaded_at, never clobbers",
+          "[indexer][download]") {
+  Fixture f;
+  REQUIRE(f.db != nullptr);
+  Indexer idx(*f.db);
+  REQUIRE(idx.valid());
+  const long long root = idx.EnsureRoot(f.corpus(""));
+
+  const std::string path = f.corpus("doc.txt");
+  WriteFile(path, "hello");
+  REQUIRE(idx.UpsertFile(path, root, 1) == Indexer::Result::kInserted);
+  // Fresh insert: the extractor hasn't run, so downloaded_at is still NULL.
+  CHECK(Scalar(*f.db, "SELECT downloaded_at IS NULL FROM files WHERE path='" +
+                          path + "'") == 1);
+  const long long id =
+      Scalar(*f.db, "SELECT id FROM files WHERE path='" + path + "'");
+
+  ExtractResult r;
+  r.file_id = id;
+  r.downloaded_at = 1597938752;
+  idx.ApplyExtraction(r);
+  CHECK(Scalar(*f.db, "SELECT downloaded_at FROM files WHERE id=" +
+                          std::to_string(id)) == 1597938752);
+
+  // A later extraction that resolves no date (0) must not reset it to NULL.
+  ExtractResult r2;
+  r2.file_id = id;
+  r2.downloaded_at = 0;
+  idx.ApplyExtraction(r2);
+  CHECK(Scalar(*f.db, "SELECT downloaded_at FROM files WHERE id=" +
+                          std::to_string(id)) == 1597938752);
 }
 
 TEST_CASE("UpsertFile skips non-indexed types and reports missing",

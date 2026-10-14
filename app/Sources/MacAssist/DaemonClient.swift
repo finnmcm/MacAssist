@@ -25,9 +25,10 @@ struct DaemonClient {
     private static let maxFrameSize: UInt32 = 16 * 1024 * 1024
 
     // Runs a full-stage query and returns the ranked hits.
-    func query(_ text: String, id: Int, stage: String = "full") throws -> [FileHit] {
+    func query(_ text: String, id: Int, stage: String = "full",
+               filters: QueryFilters = QueryFilters()) throws -> [FileHit] {
         let payload = try JSONEncoder().encode(
-            QueryRequest(id: id, text: text, stage: stage))
+            QueryRequest(id: id, text: text, stage: stage, filters: filters))
         let responseData = try roundTrip(payload)
         let resp = try JSONDecoder().decode(ResultsResponse.self, from: responseData)
         if resp.type == "error" {

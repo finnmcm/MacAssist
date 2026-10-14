@@ -60,8 +60,25 @@ std::string RequestRouter::Handle(const std::string& request_json) {
     const std::string stage = req.value("stage", std::string("full"));
     const int limit = req.value("limit", 5);
 
+    // Optional filter set (filter toolbar). Omitted/empty reproduces the
+    // pre-toolbar behavior, so older clients stay valid. Unknown/mistyped
+    // fields are ignored rather than erroring.
+    QueryFilters filters;
+    if (req.contains("filters") && req["filters"].is_object()) {
+      const json& f = req["filters"];
+      if (f.contains("kinds") && f["kinds"].is_array()) {
+        for (const auto& k : f["kinds"])
+          if (k.is_string()) filters.kinds.insert(k.get<std::string>());
+      }
+      if (f.contains("tagColors") && f["tagColors"].is_array()) {
+        for (const auto& c : f["tagColors"])
+          if (c.is_number_integer()) filters.tag_colors.insert(c.get<int>());
+      }
+      filters.downloaded_only = f.value("downloaded", false);
+    }
+
     json items = json::array();
-    for (const FileHit& h : SearchFiles(db_, text, limit)) {
+    for (const FileHit& h : SearchFiles(db_, text, limit, filters)) {
       // tags_json is stored text; re-parse it into a structured array so the
       // app receives real JSON (a malformed/empty value degrades to []).
       json tags = json::array();

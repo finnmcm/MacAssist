@@ -19,6 +19,7 @@ add_library(macassistd_core STATIC
   src/extract/pdf_text.mm
   src/extract/media_tags.mm
   src/extract/finder_tags.mm
+  src/extract/download_date.mm
   src/query/query_engine.cpp)
 
 # PUBLIC so dependents (macassistd, daemon_tests) inherit the include path,
@@ -30,7 +31,7 @@ target_include_directories(macassistd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sr
 set_source_files_properties(
   src/sweep/fs_watcher.mm src/sweep/politeness.mm
   src/extract/pdf_text.mm src/extract/media_tags.mm
-  src/extract/finder_tags.mm
+  src/extract/finder_tags.mm src/extract/download_date.mm
   PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 
 target_link_libraries(macassistd_core PUBLIC

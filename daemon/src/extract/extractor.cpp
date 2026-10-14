@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "extract/download_date.hpp"
 #include "extract/text_extractors.hpp"
 #include "index/database.hpp"
 #include "sweep/politeness.hpp"
@@ -143,6 +144,11 @@ void Extractor::Run() {
       auto res = std::make_shared<ExtractResult>();
       res->file_id = r.id;
       res->fingerprint = r.fingerprint;
+      // Resolve the download date here (off the writer/crawl thread): the
+      // quarantine-xattr fast path plus a Spotlight lookup. Done for every file
+      // regardless of type, so a download of any kind gets dated. 0 = none.
+      long long dl = 0;
+      if (ReadDownloadDate(r.path, &dl)) res->downloaded_at = dl;
       // Dispatch by type. Deferred/unsupported types (rtf, office) and any
       // failure leave the payload empty; the file is still stamped done by the
       // writer's guarded clear, so it never loops.

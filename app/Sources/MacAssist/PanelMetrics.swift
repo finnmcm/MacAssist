@@ -8,6 +8,7 @@ import CoreGraphics
 enum PanelMetrics {
     static let width: CGFloat = 620
     static let fieldHeight: CGFloat = 56
+    static let toolbarHeight: CGFloat = 46  // always-visible filter button row
     static let rowHeight: CGFloat = 52
     static let footerHeight: CGFloat = 44
     static let statusHeight: CGFloat = 44
@@ -21,17 +22,20 @@ enum PanelMetrics {
         return CGFloat(visible) * rowHeight + listVPadding
     }
 
-    // Total window height for the current state: just the field when empty,
-    // field + list + "show all" footer when there are hits, or field + a
+    // The always-present header: search field + filter toolbar row.
+    static var headerHeight: CGFloat { fieldHeight + toolbarHeight }
+
+    // Total window height for the current state: header alone when empty,
+    // header + list + "show all" footer when there are hits, or header + a
     // status line ("No matches"/error) when there are none but a message.
     static func totalHeight(rowCount: Int, hasStatus: Bool) -> CGFloat {
         if rowCount > 0 {
-            return fieldHeight + dividerHeight + listHeight(rowCount: rowCount)
+            return headerHeight + dividerHeight + listHeight(rowCount: rowCount)
                 + dividerHeight + footerHeight
         }
         if hasStatus {
-            return fieldHeight + dividerHeight + statusHeight
+            return headerHeight + dividerHeight + statusHeight
         }
-        return fieldHeight
+        return headerHeight
     }
 }

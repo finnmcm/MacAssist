@@ -2,6 +2,23 @@ import AppKit
 import Combine
 import Foundation
 
+// One active filter-toolbar selection. `.kind` carries the canonical daemon
+// kind (image|audio|video|document), never the UI label — the toolbar maps
+// labels (Photos/Videos/Music/Documents) to these in SearchView.
+enum Filter: Equatable, Hashable, Identifiable {
+    case recentlyDownloaded
+    case kind(String)
+    case tag(color: Int)
+
+    var id: String {
+        switch self {
+        case .recentlyDownloaded: return "downloaded"
+        case .kind(let k): return "kind:\(k)"
+        case .tag(let c): return "tag:\(c)"
+        }
+    }
+}
+
 // Drives the panel: debounces keystrokes into daemon queries, publishes
 // ranked hits, and performs the per-result actions. Phase 1 wires Stage A
 // ("instant") only; Stage B refinement arrives with the intelligence work
@@ -9,6 +26,7 @@ import Foundation
 @MainActor
 final class SearchModel: ObservableObject {
     @Published var queryText = ""
+    @Published var activeFilters: [Filter] = []
     @Published var results: [FileHit] = []
     @Published var selection: Int = 0
     @Published var status: String = ""
@@ -25,24 +43,44 @@ final class SearchModel: ObservableObject {
     init(client: DaemonClient) {
         self.client = client
         // Coalesce rapid typing; the daemon is fast but there's no point
-        // firing a socket round-trip on every keystroke.
-        debounce = $queryText
-            .removeDuplicates()
+        // firing a socket round-trip on every keystroke. A filter toggle fires
+        // the same path, so the two sources are combined.
+        debounce = Publishers.CombineLatest($queryText, $activeFilters)
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
             .debounce(for: .milliseconds(120), scheduler: RunLoop.main)
-            .sink { [weak self] text in self?.run(text) }
+            .sink { [weak self] text, filters in self?.run(text, filters) }
     }
 
     // Called when the panel opens so a stale result list isn't shown.
+    // Persistence = clear everything on open, so filters reset too.
     func reset() {
         queryText = ""
+        activeFilters = []
         results = []
         selection = 0
         status = ""
     }
 
-    private func run(_ text: String) {
+    // Translate the active filters into the wire shape. `.kind` values are
+    // already canonical daemon kinds (set by the toolbar), so no mapping here.
+    private func wireFilters(_ filters: [Filter]) -> QueryFilters {
+        var qf = QueryFilters()
+        for f in filters {
+            switch f {
+            case .recentlyDownloaded: qf.downloaded = true
+            case .kind(let k): qf.kinds.append(k)
+            case .tag(let c): qf.tagColors.append(c)
+            }
+        }
+        return qf
+    }
+
+    private func run(_ text: String, _ filters: [Filter]) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        let qf = wireFilters(filters)
+        // Empty text is now a valid query when filters are active; only bail
+        // when there is nothing at all to search on.
+        guard !trimmed.isEmpty || !qf.isEmpty else {
             results = []
             status = ""
             return
@@ -54,7 +92,7 @@ final class SearchModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [client] in
             let outcome: Result<[FileHit], Error>
             do {
-                outcome = .success(try client.query(trimmed, id: id))
+                outcome = .success(try client.query(trimmed, id: id, filters: qf))
             } catch {
                 outcome = .failure(error)
             }
@@ -72,6 +110,31 @@ final class SearchModel: ObservableObject {
             }
         }
     }
+
+    // MARK: - filters
+
+    // Toolbar button: add the filter if absent, remove it if already active.
+    func toggle(_ filter: Filter) {
+        if let i = activeFilters.firstIndex(of: filter) {
+            activeFilters.remove(at: i)
+        } else {
+            activeFilters.append(filter)
+        }
+    }
+
+    // Chip ×.
+    func remove(_ filter: Filter) {
+        activeFilters.removeAll { $0 == filter }
+    }
+
+    // Backspace on an empty field removes the most recently added chip.
+    func removeLast() {
+        if !activeFilters.isEmpty { activeFilters.removeLast() }
+    }
+
+    var hasFilters: Bool { !activeFilters.isEmpty }
+
+    func isActive(_ filter: Filter) -> Bool { activeFilters.contains(filter) }
 
     // MARK: - actions
 

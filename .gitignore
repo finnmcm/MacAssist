@@ -5,3 +5,6 @@ compile_commands.json
 
 # SwiftPM build products for the UI app
 app/.build/
+
+# Devil's Advocate critique artifacts
+.devils-advocate/

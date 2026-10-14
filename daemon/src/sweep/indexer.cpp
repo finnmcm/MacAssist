@@ -64,6 +64,11 @@ Indexer::Indexer(Database& db) : db_(db) {
   // reconcile pass doesn't rewrite every row.
   set_tags_ =
       Stmt(db_.handle(), "UPDATE files SET tags_json=?1 WHERE id=?2", &err);
+  // Download date, written from an extraction payload (resolved off the writer
+  // thread). Immutable once known; ApplyExtraction only writes a resolved
+  // value, so this never clobbers a recorded date back to NULL.
+  set_dl_ = Stmt(db_.handle(),
+                 "UPDATE files SET downloaded_at=?1 WHERE id=?2", &err);
   tomb_path_ =
       Stmt(db_.handle(), "UPDATE files SET missing=1 WHERE path=?1", &err);
   tomb_stale_ = Stmt(db_.handle(),
@@ -87,7 +92,7 @@ Indexer::Indexer(Database& db) : db_(db) {
                         "UPDATE files SET needs_extract=0 "
                         "WHERE id=?1 AND fingerprint=?2",
                         &err);
-  valid_ = sel_ && ins_ && insft_ && upd_ && touch_ && set_tags_ &&
+  valid_ = sel_ && ins_ && insft_ && upd_ && touch_ && set_tags_ && set_dl_ &&
            tomb_path_ && tomb_stale_ && ins_root_ && sel_root_ && updft_ &&
            del_meta_ && ins_meta_ && clear_extract_;
 }
@@ -153,6 +158,8 @@ Indexer::Result Indexer::UpsertFile(const std::string& path, long long root_id,
     sqlite3_bind_text(s, 10, fp.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(s, 11, gen);
     sqlite3_bind_text(s, 12, tags.c_str(), -1, SQLITE_TRANSIENT);
+    // downloaded_at is left NULL here and resolved later by the extractor
+    // (off the writer thread); see ApplyExtraction.
     if (sqlite3_step(s) != SQLITE_DONE) return Result::kSkipped;
     const long long id = sqlite3_last_insert_rowid(db_.handle());
 
@@ -178,6 +185,8 @@ Indexer::Result Indexer::UpsertFile(const std::string& path, long long root_id,
     sqlite3_bind_int64(s, 7, existing_id);
     sqlite3_bind_text(s, 8, tags.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(s);
+    // needs_extract is re-set by upd_, so the extractor re-resolves
+    // downloaded_at on a content change (e.g. a re-download) too.
     return Result::kUpdated;
   }
 
@@ -221,6 +230,17 @@ void Indexer::ApplyExtraction(const ExtractResult& r) {
     sqlite3_bind_text(m, 2, kv.first.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(m, 3, kv.second.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(m);
+  }
+
+  // Persist the download date the extractor resolved. Only when it got a value
+  // (>0): a file with no download signal, or one whose volatile quarantine
+  // xattr has since vanished, must not reset an already-recorded date to NULL.
+  if (r.downloaded_at > 0) {
+    sqlite3_stmt* d = set_dl_.get();
+    sqlite3_reset(d);
+    sqlite3_bind_int64(d, 1, r.downloaded_at);
+    sqlite3_bind_int64(d, 2, r.file_id);
+    sqlite3_step(d);
   }
 
   // Clear the flag only if the file hasn't changed since the extractor read it.
