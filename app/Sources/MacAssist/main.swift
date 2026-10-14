@@ -21,6 +21,12 @@ final class AppController: NSObject, NSApplicationDelegate {
         setUpMenuBar()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // Result folders are disposable per-search outputs; drop them on quit
+        // so no hard links (or .DS_Store) linger between sessions.
+        ResultsFolder.removeAll()
+    }
+
     private func setUpMenuBar() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Fall back through a couple of symbols, then to a text glyph, so

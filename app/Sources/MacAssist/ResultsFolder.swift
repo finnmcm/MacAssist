@@ -86,14 +86,23 @@ enum ResultsFolder {
     // Removes every existing result folder. Runs before each search builds
     // its own folder, so only the current search's output survives. If a
     // "recent searches" feature is ever added, a bounded retention policy
-    // would replace this.
+    // would replace this. Hidden files are included so Finder's .DS_Store
+    // doesn't linger and keep an "empty" folder alive.
     private static func clearPrevious() {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: root, includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]) else { return }
+            options: []) else { return }
         for entry in entries {
             try? fm.removeItem(at: entry)
         }
+    }
+
+    // Deletes the whole Results tree. Called on app quit so nothing lingers
+    // between sessions -- important because the result entries are hard links:
+    // a leftover link keeps a since-deleted original's data blocks on disk
+    // until it's removed.
+    static func removeAll() {
+        try? FileManager.default.removeItem(at: root)
     }
 }
