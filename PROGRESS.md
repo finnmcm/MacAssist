@@ -194,6 +194,14 @@ cheap content extraction, and the test suite (brick 6). Remaining extraction dep
   empty `content` (name-searchable only).
 - **Extraction caps (PLAN §3):** text/PDF bodies capped at 100 KB; PDFs at 200 pages; image/AV
   metadata is a curated subset (dimensions, camera make/model, duration, title/artist/album).
+- **"Recently downloaded" (filter toolbar) rides on the quarantine xattr in practice.**
+  `files.downloaded_at` (schema v6) is resolved in the extractor from
+  `com.apple.quarantine` (fast path) → `kMDItemDownloadedDate` (fallback). Verified on real data
+  (2026-10-14): on the dev machine **144/149 `~/Downloads` files carried the quarantine xattr**
+  and it persisted durably, while **`kMDItemDownloadedDate` was populated for ~zero** files. Both
+  code paths are correct, but effective coverage is really "files that still have a quarantine
+  xattr" (~97% here), *not* the universal "Spotlight source of truth" the plan assumed — a file
+  with neither signal is not flagged as a download. See `TOOLBAR_PLAN.md` §1.
 
 ### Extraction engine — things to remember
 - **`pending` is the durable truth; `extractedFiles` is not.** `extractedFiles` is an in-memory

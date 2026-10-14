@@ -84,6 +84,20 @@ are active.
   non-NULL `downloaded_at` back to NULL.
 - Files that are genuinely not downloads stay `NULL`. This is display/filter
   only — not added to the FTS `file_text` table.
+- **Empirical note (verified on real data, 2026-10-14).** The "Spotlight is the
+  source of truth" framing above did not hold up on the dev machine: scanning
+  `~/Downloads` (149 files), **144 carried `com.apple.quarantine`** and the
+  xattr persisted durably (even a 1.5-year-old PDF still had it — it is *not* as
+  volatile as assumed), while **`kMDItemDownloadedDate` was populated for zero**
+  of them (and only a single file system-wide, outside the indexed roots). Both
+  code paths are verified correct — the xattr parse resolved real files to the
+  right epoch, and an isolated `kMDItemDownloadedDate` lookup returned the exact
+  date where the attribute existed — but in practice **the quarantine xattr
+  carries the feature**; the Spotlight fallback is correct-but-rarely-fires here.
+  So the effective coverage is "files that still have a quarantine xattr"
+  (~97% of real downloads on this machine), not the universal guarantee the
+  source-of-truth wording implies. Keep the Spotlight fallback (cheap, off the
+  hot path, helps where the attribute *is* populated), but don't rely on it.
 
 ## 2. Daemon — query engine filters (`daemon/src/query/query_engine.cpp`)
 
