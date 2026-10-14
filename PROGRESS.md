@@ -13,7 +13,7 @@ See `PLAN.md` for the full design and rationale.
 | Phase | Scope | Status |
 |---|---|---|
 | **Phase 1** | Vertical slice: hotkey → panel → daemon → filename FTS → open | ✅ Done (on `main`) |
-| **Phase 2** | Real indexing: live sweeper + content extraction | 🚧 In progress — bricks 1–5 of 6 done |
+| **Phase 2** | Real indexing: live sweeper + content extraction | ✅ Done — bricks 1–6 of 6 (test suite landed) |
 | **Phase 3** | Intelligence: AFM `SearchIntent` + CoreML embeddings + two-stage query | ⬜ Not started |
 | **Phase 4** | Product polish: settings, onboarding, launchd, signing/notarization/DMG | ⬜ Not started |
 | **Phase 5** | Stretch: voice, transcription, chunked embeddings, auto-open | ⬜ Not started |
@@ -46,6 +46,17 @@ onboarding, Full Disk Access flow ⬜ Phase 4.
 
 ### `mactl` (CLI, speaks the socket protocol)
 `status`, `query <text>` work. ✅ Primary dev/test harness.
+
+### Tests — `daemon/tests/` (Catch2 + CTest)
+✅ **Brick 6.** One `daemon_tests` binary over `macassistd_core` (the daemon logic is now a
+static lib so tests and the executable share identical code). 40 cases / 267 assertions covering
+`file_kind`, `database` (schema v4, migration rebuild, meta, counts, RO guard), `indexer`
+(upsert/fingerprint/tombstone/`needs_extract`/`ApplyExtraction` race-guard), `crawler`,
+`query_engine` (incl. the name-match ranking tier), `plain_text`, `frame`, `protocol`,
+`request_router`, and a threaded `Writer`+`Extractor` integration test. Golden fixtures
+(`report.pdf`/`camera.jpg`/`song.m4a`) exercise the PDFKit/ImageIO/AVFoundation bridges. Run with
+`./scripts/test.sh` (or `ctest --test-dir build`). Catch2 v2 single header vendored at
+`third_party/catch2/`.
 
 ### Build & distribution
 CMake (daemon + `mactl`) + SwiftPM (app), via `scripts/build.sh`. `.app` bundling via
@@ -94,6 +105,11 @@ hits. Daemon did a one-shot stat-only crawl at startup; name-only FTS. (See git 
   (txt/md/csv), `pdf_text.mm` (PDFKit), `media_tags.mm` (ImageIO EXIF + AVFoundation tags).
   On battery the backlog is deferred to AC via an `indexed_at >= now−7d` filter
   (`--pretend-battery` dev flag). **RTF + office docs + OCR deferred to Phase 2.5.**
+- **Brick 6 — test suite** (branch). The daemon logic is now a static lib (`macassistd_core`)
+  shared by the `macassistd` executable and a `daemon_tests` binary; `main.cpp` is a thin shell.
+  Catch2 v2 single-header vendored. 40 cases / 267 assertions across unit + integration tests
+  (see the Tests facet above), including threaded `Writer`+`Extractor` coverage and golden
+  PDF/JPG/M4A fixtures. `./scripts/test.sh` builds + runs via CTest.
 - **Query ranking — name-match tier** (post-brick-5, during testing). `SearchFiles` now tiers a
   **direct filename match above any content/path-only hit** (`LEFT JOIN` to a name-column match;
   `name_hit IS NULL` is the primary `ORDER BY` key, bm25 breaks ties within a tier). The tiering
@@ -113,9 +129,10 @@ old-`indexed_at` file stays deferred while fresh files extract.
 
 ## What's next
 
-### Phase 2 remaining
-- **Brick 6 — fixture corpus + tests.** Turn the ad-hoc shell checks into a real
-  Catch2/GoogleTest suite + a golden-query set.
+### Phase 2 — complete
+All six bricks landed: incremental sweeper, FSEvents live updates, reconciliation, politeness,
+cheap content extraction, and the test suite (brick 6). Remaining extraction depth is Phase 2.5.
+
 - **Phase 2.5 (follow-on):** Vision OCR for image-only PDFs/images; office-doc (docx/pages)
   and RTF text extraction — the parsers brick 5 deferred. These re-trigger extraction via the
   schema-bump nuke-rebuild.
@@ -133,7 +150,8 @@ old-`indexed_at` file stays deferred while fresh files extract.
 ## How to build & run
 
 ```bash
-./scripts/build.sh          # daemon + mactl (CMake) and the app (SwiftPM)
+./scripts/build.sh          # daemon + mactl + daemon_tests (CMake) and the app (SwiftPM)
+./scripts/test.sh           # build + run the test suite via CTest ([tag] filters a subset)
 ./scripts/make-app.sh       # (re)build the MacAssist.app bundle
 
 # Against real files (defaults: ~/Library/Application Support/MacAssist/{daemon.sock,index.db}
@@ -177,6 +195,10 @@ old-`indexed_at` file stays deferred while fresh files extract.
   `--pretend-battery` to force the on-battery path for testing.
 - **No per-file extraction timeout** (single extractor thread) — a pathological PDF could stall
   the backlog. Page/size caps are the only mitigation; subprocess isolation is a later hardening.
+- **Fingerprint is `mtime(sec):size`** — a same-size edit within the *same wall-clock second* as
+  the prior index is not detected (neither live nor on reconcile) until mtime ticks. Coarse by
+  design; real edits virtually always change size or cross a second boundary. (Bit us once in a
+  test where two bodies were coincidentally equal length.)
 - **`CoreGraphics PDF has logged an error`** in the daemon log is harmless noise from PDFKit
   parsing a malformed PDF; our code treats it as empty content and moves on.
 

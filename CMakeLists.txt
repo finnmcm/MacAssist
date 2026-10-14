@@ -20,6 +20,17 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 add_library(nlohmann_json INTERFACE)
 target_include_directories(nlohmann_json INTERFACE ${CMAKE_SOURCE_DIR}/third_party)
 
+# Catch2 v2 single-header test framework (vendored at third_party/catch2/catch.hpp,
+# included as <catch2/catch.hpp>). Header-only; one TU defines CATCH_CONFIG_MAIN.
+add_library(catch2 INTERFACE)
+target_include_directories(catch2 INTERFACE ${CMAKE_SOURCE_DIR}/third_party)
+
+# Tests are built unless explicitly disabled (-DBUILD_TESTING=OFF). CTest driver.
+option(BUILD_TESTING "Build the test suite" ON)
+if(BUILD_TESTING)
+  enable_testing()
+endif()
+
 # Vendored SQLite amalgamation, built with FTS5 enabled. Compiled as its
 # own target with warnings silenced (-w) so our -Wall/-Wpedantic flags
 # don't drown us in third-party noise.

@@ -306,19 +306,22 @@ arrives. Version mismatch → app offers daemon reinstall.
 ```
 MacAssist/
   PLAN.md
-  daemon/            # C++20; sources for macassistd
-    src/{main,ipc,sweep,index,query}/     # pure C++
-    src/extract/     # .mm ObjC++ bridges (PDFKit, Vision, AVFoundation, EXIF)
+  daemon/            # C++20; macassistd (+ macassistd_core static lib)
+    src/{main,ipc,sweep,index,query}/     # pure C++ (main.cpp = thin shell on the lib)
+    src/extract/     # .mm ObjC++ bridges (PDFKit, ImageIO, AVFoundation) + plain_text.cpp
     src/ai/          # Swift files (AFM session, CoreML embedder) + interop headers
-    tests/           # Catch2/GoogleTest ⚙ + fixture corpus
+    tests/           # Catch2 (vendored single header) + golden fixtures; CTest target
   app/               # Swift app target (panel, menu bar, settings, onboarding)
   shared/            # protocol constants/schemas shared by daemon, app, mactl
   tools/mactl/       # CLI client (Swift or C++, trivial either way)
   scripts/           # dev bootstrap, corpus generator, latency bench
 ```
 
-Build (current): the daemon + `mactl` build with **CMake** (C++20; the `.mm` FSEvents bridge
-compiles as ObjC++/ARC with CoreServices linked), and the Swift app builds with **SwiftPM**.
+Build (current): the daemon + `mactl` + the `daemon_tests` suite build with **CMake** (C++20;
+the `.mm` bridges compile as ObjC++/ARC). The daemon's logic lives in a `macassistd_core`
+static library linked by both the executable and the tests; `./scripts/test.sh` runs the suite
+via CTest. Test framework: **Catch2 v2** (vendored single header; chosen over GoogleTest to match
+the repo's hand-vendored, header-only dependency style). The Swift app builds with **SwiftPM**.
 The two are independent and meet only over the socket protocol. The **Xcode-workspace
 migration is deferred to Phase 3**, when Swift↔C++ interop for AFM/CoreML
 (`SWIFT_OBJC_INTEROP_MODE`) forces a single mixed-language binary — CMake fights that, but
@@ -344,8 +347,9 @@ is the thermal risk and can't finish during the crawl). Fixture corpus + tests.
 within seconds and survives restarts; (crawl speed) a 50k-file stat pass makes filenames
 searchable in minutes; (content) extracted text/tags fill in progressively in the background
 without blocking search.*
-*Status: sweeper + FSEvents + reconciliation + politeness + cheap extraction all implemented
-(bricks 1–5); fixture corpus + test suite (brick 6) remain. See `PROGRESS.md`.*
+*Status: **complete** — sweeper + FSEvents + reconciliation + politeness + cheap extraction +
+test suite (all six bricks) implemented. Remaining extraction depth is Phase 2.5. See
+`PROGRESS.md`.*
 
 **Phase 3 — Intelligence.**
 Swift interop layer; AFM `SearchIntent` guided generation with prewarmed session; CoreML

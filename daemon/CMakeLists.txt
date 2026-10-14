@@ -1,7 +1,10 @@
 # macassistd: the background daemon -- owns the index, sweeps the roots,
 # and answers requests over the Unix socket.
-add_executable(macassistd
-  src/main.cpp
+#
+# The daemon's logic lives in a static library (macassistd_core) so both the
+# executable and the test suite link the exact same code; main.cpp is a thin
+# shell on top of it.
+add_library(macassistd_core STATIC
   src/ipc/socket_server.cpp
   src/ipc/request_router.cpp
   src/index/database.cpp
@@ -17,8 +20,9 @@ add_executable(macassistd
   src/extract/media_tags.mm
   src/query/query_engine.cpp)
 
-# Allows includes like "ipc/socket_server.hpp" and "index/database.hpp".
-target_include_directories(macassistd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# PUBLIC so dependents (macassistd, daemon_tests) inherit the include path,
+# the third-party libs, and the Apple frameworks.
+target_include_directories(macassistd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # The Objective-C++ bridges (FSEvents, thermal/power, PDF/media extraction)
 # compile with ARC.
@@ -27,7 +31,7 @@ set_source_files_properties(
   src/extract/pdf_text.mm src/extract/media_tags.mm
   PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 
-target_link_libraries(macassistd PRIVATE
+target_link_libraries(macassistd_core PUBLIC
   macassist_shared nlohmann_json sqlite3
   "-framework CoreServices" "-framework CoreFoundation"
   "-framework Foundation" "-framework IOKit"
@@ -35,3 +39,10 @@ target_link_libraries(macassistd PRIVATE
   # audio/video metadata.
   "-framework PDFKit" "-framework ImageIO" "-framework CoreGraphics"
   "-framework AVFoundation" "-framework CoreMedia")
+
+add_executable(macassistd src/main.cpp)
+target_link_libraries(macassistd PRIVATE macassistd_core)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
