@@ -50,7 +50,7 @@ class Indexer {
  private:
   Database& db_;
   bool valid_ = false;
-  Stmt sel_, ins_, insft_, upd_, touch_, tomb_path_, tomb_stale_;
+  Stmt sel_, ins_, insft_, upd_, touch_, set_tags_, tomb_path_, tomb_stale_;
   Stmt ins_root_, sel_root_;
   Stmt updft_, del_meta_, ins_meta_, clear_extract_;
 };

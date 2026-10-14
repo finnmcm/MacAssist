@@ -13,6 +13,7 @@ add_executable(daemon_tests
   crawler_test.cpp
   query_engine_test.cpp
   plain_text_test.cpp
+  finder_tags_test.cpp
   frame_test.cpp
   protocol_test.cpp
   request_router_test.cpp

@@ -13,6 +13,7 @@ struct FileHit {
   std::string kind;
   long long modified_at = 0;
   double score = 0.0;  // bm25: lower is a better match
+  std::string tags_json;  // Finder color tags, [{"name","color"}] or empty
 };
 
 // Runs a filename/path keyword search over the FTS index for `text` and

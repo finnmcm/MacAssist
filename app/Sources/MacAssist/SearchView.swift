@@ -115,6 +115,7 @@ private struct ResultRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            TagDots(tags: hit.tags ?? [])
         }
         .foregroundStyle(selected ? Color.white : .primary)
         .padding(.horizontal, 14)
@@ -138,6 +139,42 @@ private struct ResultRow: View {
         case "video": return "film"
         case "document": return "doc.text"
         default: return "doc"
+        }
+    }
+}
+
+// The trailing Finder-tag swatches on a result row: one dot per colored tag,
+// in the file's tag order. Named tags with no color (index 0) are skipped --
+// there's nothing to draw for them in a compact row.
+private struct TagDots: View {
+    let tags: [FileTag]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(tags.enumerated()), id: \.offset) { _, tag in
+                if let color = Self.color(for: tag.color) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 9, height: 9)
+                        .overlay(
+                            Circle().stroke(Color.black.opacity(0.18), lineWidth: 0.5))
+                        .help(tag.name)
+                }
+            }
+        }
+    }
+
+    // Finder label indices → colors (0 = no color, drawn as nothing).
+    static func color(for index: Int) -> Color? {
+        switch index {
+        case 1: return .gray
+        case 2: return .green
+        case 3: return .purple
+        case 4: return .blue
+        case 5: return .yellow
+        case 6: return .red
+        case 7: return .orange
+        default: return nil
         }
     }
 }

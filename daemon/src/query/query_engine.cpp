@@ -63,7 +63,7 @@ std::vector<FileHit> SearchFiles(Database& db, const std::string& text,
   // table rather than a correlated subquery.)
   std::string err;
   Stmt s(db.handle(),
-         "SELECT f.id, f.path, f.name, f.kind, f.modified_at, "
+         "SELECT f.id, f.path, f.name, f.kind, f.modified_at, f.tags_json, "
          "  bm25(file_text, 10.0, 4.0, 2.0, 3.0) AS score, "
          "  nmz.rowid AS name_hit "
          "FROM file_text ft JOIN files f ON f.id = ft.rowid "
@@ -84,7 +84,8 @@ std::vector<FileHit> SearchFiles(Database& db, const std::string& text,
     h.name = ColText(s.get(), 2);
     h.kind = ColText(s.get(), 3);
     h.modified_at = sqlite3_column_int64(s.get(), 4);
-    h.score = sqlite3_column_double(s.get(), 5);
+    h.tags_json = ColText(s.get(), 5);
+    h.score = sqlite3_column_double(s.get(), 6);
     hits.push_back(std::move(h));
   }
   return hits;

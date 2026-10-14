@@ -6,7 +6,7 @@
 namespace macassist {
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 
 // Reads meta.schema_version; returns 0 if the meta table or row is absent
 // (e.g. a brand-new database), which forces a rebuild to the current schema.
@@ -177,7 +177,11 @@ bool Database::Migrate(std::string* err) {
       fingerprint TEXT,
       missing INTEGER NOT NULL DEFAULT 0,
       seen_gen INTEGER NOT NULL DEFAULT 0,
-      needs_extract INTEGER NOT NULL DEFAULT 1);
+      needs_extract INTEGER NOT NULL DEFAULT 1,
+      -- Finder color tags as a compact JSON array ([{"name","color"}]);
+      -- read on every stat (tag changes don't move the fingerprint). Empty
+      -- string / NULL means no tags. Display-only -- not fed into FTS.
+      tags_json TEXT);
     -- Partial index so the extractor's "what's still stale?" poll is
     -- O(pending), not a scan of every indexed file (brick 5).
     CREATE INDEX idx_files_needs_extract ON files(id) WHERE needs_extract=1;

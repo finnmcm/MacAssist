@@ -62,12 +62,23 @@ std::string RequestRouter::Handle(const std::string& request_json) {
 
     json items = json::array();
     for (const FileHit& h : SearchFiles(db_, text, limit)) {
+      // tags_json is stored text; re-parse it into a structured array so the
+      // app receives real JSON (a malformed/empty value degrades to []).
+      json tags = json::array();
+      if (!h.tags_json.empty()) {
+        try {
+          json parsed = json::parse(h.tags_json);
+          if (parsed.is_array()) tags = std::move(parsed);
+        } catch (const json::exception&) {
+        }
+      }
       items.push_back({{"fileId", h.id},
                        {"path", h.path},
                        {"name", h.name},
                        {"kind", h.kind},
                        {"score", h.score},
-                       {"modifiedAt", h.modified_at}});
+                       {"modifiedAt", h.modified_at},
+                       {"tags", tags}});
     }
     return json{{"v", kProtocolVersion},
                 {"type", msg::kResults},

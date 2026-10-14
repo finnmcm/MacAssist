@@ -116,9 +116,10 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
   -- keys in use: schema_version, crawl_gen, fsevents_last_id (+ stats later)
 ```
 
-**Current schema state (v4):** `files`, `file_text` (name/path_tokens/content/tags),
-`file_meta`, `roots`, `exclusions`, `meta` are all created and populated. `file_vec` is **not
-yet created** — it lands in Phase 3 with embeddings. `content`/`tags`/`file_meta` are filled by
+**Current schema state (v5):** `files` (incl. `tags_json` — Finder color tags, read on every
+stat, display-only), `file_text` (name/path_tokens/content/tags), `file_meta`, `roots`,
+`exclusions`, `meta` are all created and populated. `file_vec` is **not yet created** — it lands
+in Phase 3 with embeddings. `content`/`tags`/`file_meta` are filled by
 the Brick-5 extractor for text/PDF/media; office docs, `rtf`, and OCR are name-only until Phase
 2.5 (schema-version bumps nuke-and-rebuild, which re-extracts everything, so those parsers
 re-trigger automatically when added).

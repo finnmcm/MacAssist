@@ -18,7 +18,7 @@ See `PLAN.md` for the full design and rationale.
 | **Phase 4** | Product polish: settings, onboarding, launchd, signing/notarization/DMG | ⬜ Not started |
 | **Phase 5** | Stretch: voice, transcription, chunked embeddings, auto-open | ⬜ Not started |
 
-**Current branch:** `phase2-indexing` (pushed to `origin`). **Schema version:** v4.
+**Current branch:** `main`. **Schema version:** v5.
 
 ---
 
@@ -29,14 +29,14 @@ See `PLAN.md` for the full design and rationale.
 |---|---|---|
 | `ipc/socket_server` | Unix-socket accept loop, length-prefixed JSON frames | ✅ works (single-threaded, one conn at a time) |
 | `ipc/request_router` | Routes `ping`/`status`/`query`; reads live sweep status | ✅ (`action`/`reindex`/`config` ⬜ not implemented) |
-| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v4, writer/reader split |
+| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v5, writer/reader split |
 | `sweep/crawler` | Full incremental walk (upsert + fingerprint-skip + tombstone) | ✅ |
 | `sweep/indexer` | Shared per-file upsert / tombstone (cached statements) | ✅ |
 | `sweep/writer` | Long-lived writer thread: owns RW conn, runs crawl + periodic reconciliation, drains command queue | ✅ |
 | `sweep/fs_watcher` | FSEvents live updates (ObjC++/`.mm`, GCD dispatch queue) | ✅ |
 | `sweep/politeness` | Thermal (NSProcessInfo) + battery (IOKit) sensors; crawl throttle under thermal pressure | ✅ |
 | `query/query_engine` | FTS5 BM25 over name + path + content + tags; **direct name matches tiered above content-only**; excludes tombstones | ✅ (content/tags filled by brick 5) |
-| `extract/` | Extractor thread (own RO conn, lock-step) + bridges: plain text, PDFKit, ImageIO/AVFoundation tags | ✅ brick 5 (OCR + office docs → Phase 2.5) |
+| `extract/` | Extractor thread (own RO conn, lock-step) + bridges: plain text, PDFKit, ImageIO/AVFoundation tags, Finder color tags | ✅ brick 5 (OCR + office docs → Phase 2.5) |
 | `ai/` | Swift interop: AFM session, CoreML embedder | ⬜ Phase 3 |
 
 ### App — `MacAssist.app` (Swift, SwiftPM)
@@ -71,7 +71,20 @@ workspace migration (Phase 3, when Swift↔C++ interop forces it).
 End-to-end: ⌥Space → type → ranked filename results → reveal in Finder / open a folder of all
 hits. Daemon did a one-shot stat-only crawl at startup; name-only FTS. (See git history.)
 
-### Phase 2 so far (branch `phase2-indexing`)
+### Post-Phase-2 features (on `main`)
+- **Finder color tags in results — display-only** (schema v5). A tiny ObjC++ bridge
+  (`extract/finder_tags.mm`) reads the `com.apple.metadata:_kMDItemUserTags` xattr (a plist of
+  `"Name\nColorIndex"` strings) into a compact JSON array stored in a new `files.tags_json`
+  column. Read on **every stat** in `Indexer::UpsertFile`, not during extraction — setting a
+  Finder tag changes neither mtime nor size, so the fingerprint can't see it; the "unchanged"
+  branch rewrites `tags_json` only when it actually differs (no reconcile write amplification).
+  Carried on `FileHit` → emitted as a structured `tags` array on each `results` item → rendered
+  as colored dots in the app's result rows (`TagDots` in `SearchView`). Not fed into FTS —
+  searching by color is deferred to a planned toolbar of "special selections". Verified live:
+  tags surface in query results, and a **tag-only change propagates within ~2s** (FSEvents →
+  re-stat → `tags_json` refresh) even though the fingerprint is unchanged.
+
+### Phase 2 (merged to `main`; developed on branch `phase2-indexing`)
 - **Brick 1 — schema v2 + connection-per-role** (`a465e26`). `Database::Open(path, Access)`:
   one read-write connection (writer) + one read-only connection (query path); WAL (not a
   lock) coordinates them. Version-gated migration (pre-release = nuke-and-rebuild). New

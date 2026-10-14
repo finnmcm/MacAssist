@@ -37,7 +37,7 @@ TEST_CASE("Open creates the v4 schema", "[database]") {
   REQUIRE(db != nullptr);
   CHECK(err.empty());
 
-  CHECK(db->GetMeta("schema_version") == "4");
+  CHECK(db->GetMeta("schema_version") == "5");
 
   sqlite3* h = db->handle();
   for (const char* t :
@@ -106,7 +106,7 @@ TEST_CASE("Version mismatch rebuilds the schema destructively", "[database]") {
 
   auto db2 = Database::Open(path, Access::ReadWrite, &err);
   REQUIRE(db2 != nullptr);
-  CHECK(db2->GetMeta("schema_version") == "4");
+  CHECK(db2->GetMeta("schema_version") == "5");
   CHECK(db2->CountFiles() == 0);  // rebuilt: prior row cleared
 }
 
