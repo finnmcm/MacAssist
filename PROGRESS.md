@@ -1,6 +1,6 @@
 # MacAssist — Progress Tracker
 
-*Living status doc. Read alongside `PLAN.md` (the authoritative design). Last updated 2026-10-12.*
+*Living status doc. Read alongside `PLAN.md` (the authoritative design). Last updated 2026-10-19.*
 
 MacAssist is a "smarter Finder" for macOS: a background daemon keeps a rich index of the
 user's files; a Spotlight-style ⌥Space panel answers natural-language queries in under ~2s.
@@ -14,11 +14,17 @@ See `PLAN.md` for the full design and rationale.
 |---|---|---|
 | **Phase 1** | Vertical slice: hotkey → panel → daemon → filename FTS → open | ✅ Done (on `main`) |
 | **Phase 2** | Real indexing: live sweeper + content extraction | ✅ Done — bricks 1–6 of 6 (test suite landed) |
-| **Phase 3** | Intelligence: AFM `SearchIntent` + CoreML embeddings + two-stage query | ⬜ Not started |
-| **Phase 4** | Product polish: settings, onboarding, launchd, signing/notarization/DMG | ⬜ Not started |
-| **Phase 5** | Stretch: voice, transcription, chunked embeddings, auto-open | ⬜ Not started |
+| **Filter toolbar** | Broad layerable filters (kinds/tags/downloaded) + `downloaded_at` signal | ✅ Done — bricks A–C (on `feature/filter-toolbar`, pending merge) |
+| **Phase 2.5** | Deeper extraction: Vision OCR, office docs (docx/pages), RTF | ⬜ Planned |
+| **Polish** | Settings UI, onboarding + FDA flow, launchd, signing/notarization/DMG | ⬜ Planned |
+| ~~**Intelligence**~~ | ~~AFM `SearchIntent` + CoreML embeddings + two-stage query~~ | ❌ **Dropped** — pivoted away from Apple Intelligence (2026-10-19) |
 
-**Current branch:** `main`. **Schema version:** v5.
+**Current branch:** `feature/filter-toolbar` (filter toolbar landed, pending merge to `main`). **Schema version:** v6.
+
+> **Direction (2026-10-19):** the Apple Intelligence phase (on-device AFM guided
+> generation + CoreML embeddings + semantic/two-stage search) is **no longer on the
+> roadmap**. Focus is on building out new product features on top of the existing
+> keyword/FTS + filter foundation. See **What's next** for the feature backlog.
 
 ---
 
@@ -28,21 +34,22 @@ See `PLAN.md` for the full design and rationale.
 | Module | Responsibility | Status |
 |---|---|---|
 | `ipc/socket_server` | Unix-socket accept loop, length-prefixed JSON frames | ✅ works (single-threaded, one conn at a time) |
-| `ipc/request_router` | Routes `ping`/`status`/`query`; reads live sweep status | ✅ (`action`/`reindex`/`config` ⬜ not implemented) |
-| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v5, writer/reader split |
+| `ipc/request_router` | Routes `ping`/`status`/`query` (incl. `filters`); reads live sweep status | ✅ (`action`/`reindex`/`config` ⬜ not implemented) |
+| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v6, writer/reader split |
 | `sweep/crawler` | Full incremental walk (upsert + fingerprint-skip + tombstone) | ✅ |
 | `sweep/indexer` | Shared per-file upsert / tombstone (cached statements) | ✅ |
 | `sweep/writer` | Long-lived writer thread: owns RW conn, runs crawl + periodic reconciliation, drains command queue | ✅ |
 | `sweep/fs_watcher` | FSEvents live updates (ObjC++/`.mm`, GCD dispatch queue) | ✅ |
 | `sweep/politeness` | Thermal (NSProcessInfo) + battery (IOKit) sensors; crawl throttle under thermal pressure | ✅ |
-| `query/query_engine` | FTS5 BM25 over name + path + content + tags; **direct name matches tiered above content-only**; excludes tombstones | ✅ (content/tags filled by brick 5) |
-| `extract/` | Extractor thread (own RO conn, lock-step) + bridges: plain text, PDFKit, ImageIO/AVFoundation tags, Finder color tags | ✅ brick 5 (OCR + office docs → Phase 2.5) |
-| `ai/` | Swift interop: AFM session, CoreML embedder | ⬜ Phase 3 |
+| `query/query_engine` | FTS5 BM25 over name + path + content + tags; **direct name matches tiered above content-only**; excludes tombstones; **filter predicates (kinds/tags/downloaded) + empty-text filters-only recency path** | ✅ (filters landed with the toolbar) |
+| `extract/` | Extractor thread (own RO conn, lock-step) + bridges: plain text, PDFKit, ImageIO/AVFoundation tags, Finder color tags, **`download_date.mm` (quarantine xattr → Spotlight fallback)** | ✅ brick 5 + toolbar brick A (OCR + office docs → Phase 2.5) |
 
 ### App — `MacAssist.app` (Swift, SwiftPM)
 Menu-bar resident, global ⌥Space hotkey, non-activating blurred `NSPanel`, debounced live
-search, reveal-in-Finder / show-all-as-folder actions. ✅ **Phase 1 complete.** Settings UI,
-onboarding, Full Disk Access flow ⬜ Phase 4.
+search, reveal-in-Finder / show-all-as-folder actions. ✅ **Phase 1 complete.** **Filter toolbar
+landed** — always-visible filter row + in-field chips (Recently downloaded · Photos · Videos ·
+Music · Documents · Tags ▾), layered OR/AND semantics, backspace-removes-last-chip. Settings UI,
+onboarding, Full Disk Access flow ⬜ Polish phase.
 
 ### `mactl` (CLI, speaks the socket protocol)
 `status`, `query <text>` work. ✅ Primary dev/test harness.
@@ -60,8 +67,9 @@ static lib so tests and the executable share identical code). 40 cases / 267 ass
 
 ### Build & distribution
 CMake (daemon + `mactl`) + SwiftPM (app), via `scripts/build.sh`. `.app` bundling via
-`scripts/make-app.sh`. ⬜ launchd agent, code signing, notarization, DMG (Phase 4). ⬜ Xcode
-workspace migration (Phase 3, when Swift↔C++ interop forces it).
+`scripts/make-app.sh`. ⬜ launchd agent, code signing, notarization, DMG (Polish phase). The
+Xcode-workspace migration is **no longer planned** — it was only needed for the dropped
+Swift↔C++ AI interop layer; CMake + SwiftPM stays.
 
 ---
 
@@ -70,6 +78,37 @@ workspace migration (Phase 3, when Swift↔C++ interop forces it).
 ### Phase 1 (on `main`) — vertical slice
 End-to-end: ⌥Space → type → ranked filename results → reveal in Finder / open a folder of all
 hits. Daemon did a one-shot stat-only crawl at startup; name-only FTS. (See git history.)
+
+### Filter toolbar (on `feature/filter-toolbar`, pending merge)
+A broad, layerable filter toolbar under the search field; active filters render as chips inside
+the field and stack with typed text. Shipped as bricks A–C (see `TOOLBAR_PLAN.md`):
+- **Brick A — schema v6 + `downloaded_at` signal** (`09c99e3`). New `files.downloaded_at`
+  column, resolved **in the extractor** (not the hot stat/crawl path) via a new
+  `extract/download_date.mm` bridge: quarantine xattr (`flags;hex-epoch;agent;uuid`, hex-decode
+  field 2) as the fast path → `kMDItemDownloadedDate` (Spotlight) fallback. `ApplyExtraction`
+  **never clobbers a known date with NULL**. Partial index on `downloaded_at`, plus an index on
+  `modified_at` for the recency sort. **Empirical caveat:** on real data the quarantine xattr
+  carries the feature (~97% of `~/Downloads`), not Spotlight — see Known caveats + `TOOLBAR_PLAN.md` §1.
+- **Brick B — query-engine filters + protocol** (`09c99e3`). `SearchFiles` takes a `QueryFilters`
+  (defaulted empty so old callers compile): `kinds` → `f.kind IN (…)`, `tag_colors` → guarded
+  `json_each(tags_json)` EXISTS walk (the `tags_json <> '' AND json_valid(...)` guard is
+  **mandatory** — `json_each('')` aborts the whole query), `downloaded_only` →
+  `downloaded_at IS NOT NULL`. Same-type **OR**, cross-type **AND**, ANDed with FTS MATCH when
+  text is present. New **empty-text filters-only path** queries `files` directly ordered by
+  `downloaded_at DESC` (Recent active) else `modified_at DESC` — previously empty text returned
+  nothing. Protocol (`protocol.hpp` + `Protocol.swift`) gains a `filters` object; `DaemonClient`
+  forwards it.
+- **Brick C — `SearchModel` state + toolbar/chips UI** (`09c99e3`). `activeFilters: [Filter]`
+  (`.recentlyDownloaded` / `.kind(String)` / `.tag(color:)`); **`.kind` carries the canonical DB
+  kind** (`image|audio|video|document`), never the UI label (Photos→image, Music→audio, …). The
+  debounce pipeline fires on changes to **either** text **or** filters and no longer bails on
+  empty text when filters exist. `SearchView` renders the always-visible toolbar row + in-field
+  chips; `PanelController`'s key monitor handles backspace-removes-last-chip; `PanelMetrics` adds
+  `toolbarHeight` to the panel height math. `reset()` clears filters on panel reopen.
+- **Tests:** Catch2 coverage for kinds-only / tag-only / downloaded-only / mixed / text+filters,
+  the Music→audio canonical-kind mapping, the untagged-file `json_each('')` guard, the empty-text
+  recency order, the quarantine hex-decode + Spotlight fallback + NULL cases, and the
+  never-clobber-with-NULL invariant.
 
 ### Post-Phase-2 features (on `main`)
 - **Finder color tags in results — display-only** (schema v5). A tiny ObjC++ bridge
@@ -142,21 +181,29 @@ old-`indexed_at` file stays deferred while fresh files extract.
 
 ## What's next
 
-### Phase 2 — complete
-All six bricks landed: incremental sweeper, FSEvents live updates, reconciliation, politeness,
-cheap content extraction, and the test suite (brick 6). Remaining extraction depth is Phase 2.5.
+### Direction: features, not Apple Intelligence
+As of **2026-10-19** the planned intelligence phase (AFM `SearchIntent` guided generation, CoreML
+embeddings + `sqlite-vec`, two-stage semantic/progressive query + rank fusion) is **dropped**.
+We're building out product features on top of the existing keyword/FTS + filter foundation
+instead — no on-device LLM / embedding stack, and the Xcode-workspace migration that interop
+would have forced is off the table. `PLAN.md` §4 still documents that design for reference; it is
+**not** the roadmap.
 
-- **Phase 2.5 (follow-on):** Vision OCR for image-only PDFs/images; office-doc (docx/pages)
-  and RTF text extraction — the parsers brick 5 deferred. These re-trigger extraction via the
-  schema-bump nuke-rebuild.
+### Immediate (merge + stabilize)
+- **Merge `feature/filter-toolbar` → `main`** once verified end-to-end against a running daemon
+  (the Brick C manual checklist in `TOOLBAR_PLAN.md`).
 
-### Beyond Phase 2
-- **Phase 3 (intelligence):** Swift interop layer, AFM `SearchIntent` guided generation
-  (prewarmed session), CoreML embeddings + `sqlite-vec`, two-stage progressive query + rank
-  fusion. This is when the Xcode-workspace migration and the Stage-B/query-cache decisions in
-  PLAN §4 come into play.
-- **Phase 4 (polish):** settings UI, onboarding + FDA flow, launchd install/upgrade, signing +
-  notarization + DMG.
+### Feature backlog (unordered — pick next)
+- **Phase 2.5 — deeper extraction:** Vision OCR for image-only PDFs/images; office-doc
+  (docx/pages/pptx/xlsx) and RTF body-text extraction — the parsers brick 5 deferred. Re-triggers
+  on existing files via the schema-bump nuke-rebuild. (Widens search coverage; see Known caveats.)
+- **Filter toolbar follow-ons:** "only colors actually in use" Tags popover (needs a distinct-tags
+  query); more filter kinds (date ranges, size, specific folders/roots).
+- **Richer result interactions:** Quick Look preview, drag-out, copy-path, more per-row actions.
+- **`action` / `reindex` / `config` IPC:** wire up the router verbs the daemon stubs today
+  (e.g. manual reindex, runtime config).
+- **Product polish:** settings UI, onboarding + Full Disk Access flow, launchd install/upgrade,
+  code signing + notarization + DMG. (Needed before any real distribution.)
 
 ---
 
@@ -208,7 +255,7 @@ cheap content extraction, and the test suite (brick 6). Remaining extraction dep
   counter that **resets to 0 on daemon restart** (it counts applies since process start). To know
   if extraction is complete, watch `pending → 0` in `mactl status`.
 - **Schema bump = nuke-and-rebuild.** Any `kSchemaVersion` change (pre-release policy) drops all
-  tables and re-crawls + re-extracts from scratch. Currently **v4**. This is how Phase 2.5
+  tables and re-crawls + re-extracts from scratch. Currently **v6**. This is how Phase 2.5
   parsers will re-trigger extraction on existing files.
 - **On battery, the old backlog is deferred** (`indexed_at >= now−7d`); only recently-encountered
   files stay current until AC. Freshly-touched/created files still extract on battery. The
@@ -240,5 +287,5 @@ cheap content extraction, and the test suite (brick 6). Remaining extraction dep
   ⌘-drag menu-bar items to pull it out.
 
 ### Not yet built
-- **No launchd agent yet** — the daemon is launched manually (Phase 4).
+- **No launchd agent yet** — the daemon is launched manually (Polish phase).
 - **`action`/`reindex`/`config` IPC** not implemented (router handles `ping`/`status`/`query`).
