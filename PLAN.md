@@ -20,11 +20,11 @@ mp4s", "open my_photo.png") in under two seconds, via a Spotlight-style hotkey p
 | Semantic search | Bundled ~100 MB sentence-embedding model (bge-small class) via CoreML; vectors in `sqlite-vec` |
 | Storage | Single SQLite database: relational tables + FTS5 + sqlite-vec |
 | Index depth | Content-aware: PDF/doc text extraction, Vision OCR on images, media tags (ID3/MP4/EXIF). No audio transcription in v1 |
-| File types v1 | Documents (pdf, docx, txt, md, pages, rtf), Images (png, jpg, heic, gif, webp), Audio/Video (mp3, m4a, wav, mp4, mov, mkv) |
+| File types v1 | Documents (pdf, docx, txt, md, pages, rtf), Images (png, jpg, heic, gif, webp), Audio/Video (mp3, m4a, wav, mp4, mov, mkv), Code & config (py, js, ts, swift, go, rs, … + json, yaml, xml, html, css — name-only; see EDITOR_PLAN.md) |
 | Scan scope | Configurable roots; defaults: ~/Documents, ~/Desktop, ~/Downloads, ~/Movies, ~/Music, ~/Pictures + user exclusions |
 | Sweep model | Initial full crawl → FSEvents live updates → nightly reconciliation pass |
 | IPC | Unix domain socket, length-prefixed JSON (version-tagged) |
-| Result UX | Ranked top-5 list; Enter opens top hit; per-result actions: open, reveal in Finder, copy path, **create symlink** (on demand, to Desktop) |
+| Result UX | Ranked top-5 list; Enter opens top hit; per-result actions: open, reveal in Finder, copy path, **open in editor** (⌘E, code/text — see EDITOR_PLAN.md), **create symlink** (on demand, to Desktop) |
 | Voice | Phase 6 (later) — Speech framework feeding the same query pipeline |
 | First milestone | Vertical slice: hotkey → panel → daemon → FTS filename search → open |
 
@@ -86,7 +86,7 @@ CREATE TABLE files (
   root_id INT REFERENCES roots(id),
   path TEXT UNIQUE NOT NULL,           -- absolute
   name TEXT NOT NULL,                  -- basename
-  ext TEXT, kind TEXT,                 -- kind: document|image|audio|video|archive|folder
+  ext TEXT, kind TEXT,                 -- kind: document|image|audio|video|archive|folder|code
   size INT, created_at INT, modified_at INT,
   indexed_at INT,
   fingerprint TEXT,                    -- mtime:size, to skip unchanged files
@@ -285,7 +285,12 @@ arrives. Version mismatch → app offers daemon reinstall.
   content. Escape dismisses; focus returns to previous app.
 - Results: icon (QuickLook thumbnail), name, parent folder, modified date, score-debug in
   dev builds. ↑↓ navigate, **Enter = open**, ⌘Enter = reveal in Finder, ⌘C = copy path,
-  ⌘L = symlink to Desktop (collision → `name-2` suffix).
+  ⌘E = open in editor (code/text), ⌘L = symlink to Desktop (collision → `name-2` suffix).
+  A row click only highlights the row (it does not reveal/open).
+- **Open in editor (developer support):** ⌘E opens the selected code / text / Markdown result
+  in the user's chosen editor — terminal (vim default, run inside Terminal.app or iTerm) or GUI
+  (VS Code, Cursor, Zed, Sublime, Xcode, …). Configured from the menu-bar **"Default Editor"**
+  submenu; preference persists in `UserDefaults`. Full design in `EDITOR_PLAN.md`.
 - First-run onboarding: explain Full Disk Access → deep-link to System Settings pane →
   install launchd agent → kick off initial crawl with progress in the panel.
 

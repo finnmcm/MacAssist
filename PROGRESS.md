@@ -16,11 +16,13 @@ See `PLAN.md` for the full design and rationale.
 | **Phase 2** | Real indexing: live sweeper + content extraction | ✅ Done — bricks 1–6 of 6 (test suite landed) |
 | **Filter toolbar** | Broad layerable filters (kinds/tags/downloaded) + `downloaded_at` signal | ✅ Done — bricks A–C (on `main`) |
 | **Folders & zips** | Index directories (Desktop/Downloads/Documents) + `.zip` as first-class `folder`/`archive` kinds | ✅ Done (schema v7) |
+| **Open in Editor** | New `code` kind (source + config/markup now indexed) + ⌘E opens code/text/MD results in the user's editor (vim default; menu-bar "Default Editor") | ✅ Done — on `feature/open-in-editor` (pending merge) |
 | **Phase 2.5** | Deeper extraction: Vision OCR, office docs (docx/pages), RTF | ⬜ Planned |
 | **Polish** | Settings UI, onboarding + FDA flow, launchd, signing/notarization/DMG | ⬜ Planned |
 | ~~**Intelligence**~~ | ~~AFM `SearchIntent` + CoreML embeddings + two-stage query~~ | ❌ **Dropped** — pivoted away from Apple Intelligence (2026-10-19) |
 
-**Current branch:** `main`. **Schema version:** v7.
+**Current branch:** `feature/open-in-editor` (off `main`, pending merge). **Schema version:** v7
+(unchanged — the `code` kind is additive).
 
 > **Direction (2026-10-19):** the Apple Intelligence phase (on-device AFM guided
 > generation + CoreML embeddings + semantic/two-stage search) is **no longer on the
@@ -50,8 +52,11 @@ See `PLAN.md` for the full design and rationale.
 Menu-bar resident, global ⌥Space hotkey, non-activating blurred `NSPanel`, debounced live
 search, reveal-in-Finder / show-all-as-folder actions. ✅ **Phase 1 complete.** **Filter toolbar
 landed** — always-visible filter row + in-field chips (Recently downloaded · Photos · Videos ·
-Music · Documents · Tags ▾), layered OR/AND semantics, backspace-removes-last-chip. Settings UI,
-onboarding, Full Disk Access flow ⬜ Polish phase.
+Music · Documents · Code · Tags ▾), layered OR/AND semantics, backspace-removes-last-chip.
+**Open in Editor landed** — ⌘E opens code/text/MD results in the user's editor (vim default),
+set from the menu-bar **"Default Editor ▸"** submenu; a result-row click now only highlights
+(it no longer reveals in Finder). Full Settings UI, onboarding, Full Disk Access flow ⬜ Polish
+phase.
 
 ### `mactl` (CLI, speaks the socket protocol)
 `status`, `query <text>` work. ✅ Primary dev/test harness.
@@ -76,6 +81,37 @@ Swift↔C++ AI interop layer; CMake + SwiftPM stays.
 ---
 
 ## What we've done
+
+### Open in Editor — developer support (on `feature/open-in-editor`, pending merge)
+Open any code / text / Markdown result in the editor of your choice with **⌘E**, straight from
+the panel. Full design + the Devil's Advocate review in `EDITOR_PLAN.md`.
+- **New `code` kind.** `file_kind.cpp` classifies ~54 source + config/markup extensions
+  (`py/js/ts/swift/go/rs/...` + `json/yaml/xml/html/css/...`) as `kind=code`. These were
+  **previously skipped by the indexer entirely** (unknown extension → `kSkipped` at
+  `indexer.cpp:156`), so this is what makes source files searchable at all. Config/markup are
+  intentionally `code`, not `document` (they carry the `</>` icon + the new **Code** filter and
+  are excluded from Documents); `md`/`csv`/`txt` stay `document`. Additive — **no schema bump**;
+  the startup full crawl + reconcile insert the newly-classified files via normal upsert.
+- **Editor preference (app-side, `UserDefaults`).** `EditorSettings` holds a curated catalog
+  (terminal: vim/nvim/nano/emacs · GUI: VS Code/Cursor/Zed/Sublime/Xcode/TextEdit), a custom
+  command (+ "runs in terminal" toggle), and the terminal host (Terminal.app default; iTerm if
+  installed). Reached from the menu-bar **"Default Editor ▸"** submenu, rebuilt on open so
+  checkmarks / custom label / host-enabled state stay live.
+- **Launch engine.** `EditorLauncher`: GUI via `open -a "<App>" <path>`; terminal via an
+  `osascript` AppleScript that `cd`s into the file's folder and runs `<cmd> <path>` in the
+  chosen host. Two-layer quoting (shell single-quote, then AppleScript literal). Failures
+  (`appNotFound` / `automationDenied` / `launchFailed`) are returned and shown as a subtle panel
+  status, never swallowed. Runs off the main thread (the first terminal launch blocks on the TCC
+  Automation prompt).
+- **Action wiring.** `SearchModel.openInEditor()` gates on eligibility (`kind==code` OR a
+  plain-text extension — pdf/docx excluded), launches, dismisses on success. ⌘E bound in
+  `PanelController`; `Enter` still reveals, `⌘Enter` still opens the all-results folder. Added
+  the **Code** toolbar filter + `</>` icon. A result-row click now only highlights (it used to
+  reveal-in-Finder + dismiss).
+- **Verified (daemon half) on a throwaway corpus:** `.py/.swift/.go/.json/.html/.css` index as
+  `code` and are name-searchable via `mactl query`; `md/csv/txt/pdf` stay `document`, `png`
+  image, unknown `.xyz` still skipped; `pending → 0` (no extraction loop). App compiles +
+  launches; the ⌘E launch / menu / TCC paths still need manual GUI verification.
 
 ### Phase 1 (on `main`) — vertical slice
 End-to-end: ⌥Space → type → ranked filename results → reveal in Finder / open a folder of all
@@ -227,6 +263,17 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
   (the Brick C manual checklist in `TOOLBAR_PLAN.md`).
 
 ### Feature backlog (unordered — pick next)
+- **Open-in-Editor follow-ons** (see `EDITOR_PLAN.md` §7):
+  - **Configurable terminal type.** Let the user point at a non-standard terminal
+    (Alacritty / kitty / WezTerm / Ghostty / …) via a custom terminal command or launch
+    template, rather than only the built-in Terminal.app / iTerm hosts.
+  - **Hide editors that aren't installed.** Only list catalog entries the user actually has.
+    Tractable for GUI editors (resolve via bundle id / LaunchServices); terminal commands are
+    harder to detect from the app — an `LSUIElement` process has a restricted PATH and the
+    command only needs to exist inside the terminal's own shell — so those likely stay
+    always-shown or get a best-effort check.
+  - **Code content search ("grep").** Still deferred: whitelist code extensions in the
+    `plain_text` extractor so code bodies enter FTS (code is name-only today).
 - **Phase 2.5 — deeper extraction:** Vision OCR for image-only PDFs/images; office-doc
   (docx/pages/pptx/xlsx) and RTF body-text extraction — the parsers brick 5 deferred. Re-triggers
   on existing files via the schema-bump nuke-rebuild. (Widens search coverage; see Known caveats.)
@@ -263,6 +310,22 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
 ---
 
 ## Known caveats
+
+### Open in Editor
+- **Settings are reachable only from the menu-bar "Default Editor" submenu.** If the menu-bar
+  icon is hidden (notch / crowded bar), the editor can still be set directly, e.g.
+  `defaults write com.finn.macassist editor.selectedId <id>` (`vim`/`nvim`/`vscode`/`zed`/…).
+- **The catalog lists editors regardless of install state** (installed-only filtering is a
+  planned follow-on). Picking an uninstalled GUI editor surfaces "Couldn't launch … — is it
+  installed?" rather than hiding it.
+- **Terminal editors need Automation (Apple Events) permission.** The first ⌘E into a terminal
+  editor triggers a TCC prompt to control Terminal/iTerm; on denial the panel shows a
+  "Privacy › Automation" hint and nothing opens.
+- **Config/markup (`json`/`yaml`/`xml`/`html`/`css`/…) are `code`, not `document`** — by design,
+  so they appear under the **Code** filter with the code icon, not under **Documents**.
+- **⌘E eligibility is text-only:** `kind==code` or a plain-text extension
+  (`txt/md/markdown/text/log/csv/tsv`). A `document` that isn't plain text (`pdf`/`docx`) is not
+  ⌘E-eligible — opening it in a text editor would be garbage.
 
 ### Indexing / search coverage
 - **Folders are indexed only under Desktop/Downloads/Documents** (schema v7). The other three
