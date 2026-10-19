@@ -63,7 +63,6 @@ extension EditorChoice {
     ]
 
     static let defaultChoice = catalog[0]  // vim
-    static let customId = "custom"
 }
 
 // The terminal application a terminal editor is launched inside. Terminal.app
@@ -98,8 +97,6 @@ final class EditorSettings {
     private let defaults: UserDefaults
     private enum Key {
         static let selectedId = "editor.selectedId"
-        static let customCommand = "editor.customCommand"
-        static let customRunsInTerminal = "editor.customRunsInTerminal"
         static let terminalHost = "editor.terminalHost"
     }
 
@@ -109,21 +106,15 @@ final class EditorSettings {
 
     // MARK: - stored preferences
 
-    // The id of the chosen catalog entry, or `EditorChoice.customId`.
+    // The id of the chosen catalog entry. An unknown stored id (e.g. a stale
+    // "custom" from the removed custom-editor entry) resolves to the default.
     var selectedId: String {
-        get { defaults.string(forKey: Key.selectedId) ?? EditorChoice.defaultChoice.id }
+        get {
+            let id = defaults.string(forKey: Key.selectedId) ?? EditorChoice.defaultChoice.id
+            return EditorChoice.catalog.contains { $0.id == id }
+                ? id : EditorChoice.defaultChoice.id
+        }
         set { defaults.set(newValue, forKey: Key.selectedId) }
-    }
-
-    var customCommand: String {
-        get { defaults.string(forKey: Key.customCommand) ?? "" }
-        set { defaults.set(newValue, forKey: Key.customCommand) }
-    }
-
-    // Custom commands default to terminal (the vim-style common case).
-    var customRunsInTerminal: Bool {
-        get { defaults.object(forKey: Key.customRunsInTerminal) as? Bool ?? true }
-        set { defaults.set(newValue, forKey: Key.customRunsInTerminal) }
     }
 
     var terminalHost: TerminalHost {
@@ -133,20 +124,9 @@ final class EditorSettings {
 
     // MARK: - resolved choice
 
-    // The editor to actually launch, resolving the custom entry into a concrete
-    // EditorChoice. Falls back to vim if the stored id is unknown or a custom
-    // command was never entered.
+    // The editor to actually launch. Falls back to vim if the stored id is
+    // unknown (e.g. a stale value from a removed catalog entry).
     var current: EditorChoice {
-        let id = selectedId
-        if id == EditorChoice.customId {
-            let cmd = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cmd.isEmpty else { return EditorChoice.defaultChoice }
-            return EditorChoice(
-                id: EditorChoice.customId,
-                displayName: cmd,
-                kind: customRunsInTerminal ? .terminal : .gui,
-                launchTarget: cmd)
-        }
-        return EditorChoice.catalog.first { $0.id == id } ?? EditorChoice.defaultChoice
+        EditorChoice.catalog.first { $0.id == selectedId } ?? EditorChoice.defaultChoice
     }
 }

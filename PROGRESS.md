@@ -93,10 +93,11 @@ the panel. Full design + the Devil's Advocate review in `EDITOR_PLAN.md`.
   are excluded from Documents); `md`/`csv`/`txt` stay `document`. Additive — **no schema bump**;
   the startup full crawl + reconcile insert the newly-classified files via normal upsert.
 - **Editor preference (app-side, `UserDefaults`).** `EditorSettings` holds a curated catalog
-  (terminal: vim/nvim/nano/emacs · GUI: VS Code/Cursor/Zed/Sublime/Xcode/TextEdit), a custom
-  command (+ "runs in terminal" toggle), and the terminal host (Terminal.app default; iTerm if
-  installed). Reached from the menu-bar **"Default Editor ▸"** submenu, rebuilt on open so
-  checkmarks / custom label / host-enabled state stay live.
+  (terminal: vim/nvim/nano/emacs · GUI: VS Code/Cursor/Zed/Sublime/Xcode/TextEdit) and the
+  terminal host (Terminal.app default; iTerm if installed). Reached from the menu-bar
+  **"Default Editor ▸"** submenu, rebuilt on open so the checkmark / host-enabled state stay
+  live. (A free-text "Custom…" editor entry was added then removed — GUI custom via `open -a`
+  couldn't resolve CLIs like `code`; the curated catalog covers the common editors.)
 - **Launch engine.** `EditorLauncher`: GUI via `open -a "<App>" <path>`; terminal via an
   `osascript` AppleScript that `cd`s into the file's folder and runs `<cmd> <path>` in the
   chosen host. Two-layer quoting (shell single-quote, then AppleScript literal). Failures

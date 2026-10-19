@@ -93,17 +93,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(mi)
         }
 
-        menu.addItem(.separator())
-
-        let isCustom = settings.selectedId == EditorChoice.customId
-        let customTitle = (isCustom && !settings.customCommand.isEmpty)
-            ? "Custom: \(settings.customCommand)…" : "Custom…"
-        let customItem = NSMenuItem(title: customTitle,
-                                    action: #selector(editCustomEditor), keyEquivalent: "")
-        customItem.target = self
-        customItem.state = isCustom ? .on : .off
-        menu.addItem(customItem)
-
         // Terminal host — only meaningful when the selected editor is a
         // terminal editor, so the parent is disabled otherwise.
         menu.addItem(.separator())
@@ -132,41 +121,6 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let raw = sender.representedObject as? String,
               let host = TerminalHost(rawValue: raw) else { return }
         EditorSettings.shared.terminalHost = host
-    }
-
-    // A tiny prompt for a custom command + whether it runs in a terminal.
-    // Saving a non-empty command also selects "Custom" as the active editor.
-    @objc private func editCustomEditor() {
-        let settings = EditorSettings.shared
-        let alert = NSAlert()
-        alert.messageText = "Custom Editor"
-        alert.informativeText =
-            "Command (terminal) or application name (GUI) to open files with."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-
-        let field = NSTextField(frame: NSRect(x: 0, y: 26, width: 260, height: 24))
-        field.stringValue = settings.customCommand
-        field.placeholderString = "e.g. vim, code, Sublime Text"
-
-        let checkbox = NSButton(checkboxWithTitle: "Runs in a terminal",
-                                target: nil, action: nil)
-        checkbox.frame = NSRect(x: 0, y: 0, width: 260, height: 18)
-        checkbox.state = settings.customRunsInTerminal ? .on : .off
-
-        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 50))
-        accessory.addSubview(field)
-        accessory.addSubview(checkbox)
-        alert.accessoryView = accessory
-
-        NSApp.activate(ignoringOtherApps: true)
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let cmd = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        settings.customCommand = cmd
-        settings.customRunsInTerminal = checkbox.state == .on
-        if !cmd.isEmpty { settings.selectedId = EditorChoice.customId }
     }
 }
 

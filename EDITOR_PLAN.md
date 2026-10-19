@@ -96,8 +96,8 @@ extension → empty.
   - GUI choices carry an app name / bundle id, launched via `open -a` / `NSWorkspace`
     (dodges the PATH problem an `LSUIElement` app has with CLIs like `code`).
 - Curated **catalog** — terminal: vim, nvim, nano, emacs · GUI: VS Code, Cursor, Zed,
-  Sublime Text, Xcode, TextEdit — plus **Custom…** (free-text command + a "runs in terminal"
-  toggle).
+  Sublime Text, Xcode, TextEdit. (A free-text "Custom…" entry was built and then removed — see
+  §7; the catalog covers the common editors.)
 - `terminalHost` preference (Terminal.app default; iTerm if installed).
 - Backed by `UserDefaults`; default = vim / Terminal.app.
 
@@ -121,8 +121,8 @@ extension → empty.
   and leave the panel up.
 - `PanelController.handle`: add `case 14 where cmd:` (**⌘E**) → `model.openInEditor()`.
 - `main.swift setUpMenuBar()`: add a **"Default Editor ▸"** submenu — catalog with a checkmark
-  on the current choice, a "Terminal app ▸" subitem (host picker, enabled only when a terminal
-  editor is selected), and "Custom…" opening a tiny prompt window.
+  on the current choice and a "Terminal app ▸" subitem (host picker, enabled only when a terminal
+  editor is selected).
 - `SearchView` + `Protocol`: `ResultRow.icon` gains
   `case "code": "chevron.left.forwardslash.chevron.right"`; add `toolbarButton("Code",
   .kind("code"))`; `FilterLabels.kindLabel` maps `code → "Code"`. No protocol change — `kind`
@@ -168,3 +168,8 @@ extension → empty.
   code bodies enter FTS. Deliberately deferred.
 - Extensionless dev files (`Makefile`, `Dockerfile`) via basename classification.
 - A full Settings window (Polish phase) — this feature stays in the menu bar for now.
+- **Custom editor command (removed).** A free-text "Custom…" entry (command + "runs in
+  terminal" toggle) was implemented, then removed: GUI custom was confusing — `open -a` resolves
+  app *names*, not CLIs, so a dev typing `code` as a GUI target got "couldn't launch". The
+  curated catalog covers the common editors; revisit only if a clear need returns (and, if so,
+  resolve GUI CLIs via the login shell's PATH rather than `open -a`).
