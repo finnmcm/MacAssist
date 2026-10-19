@@ -86,7 +86,7 @@ CREATE TABLE files (
   root_id INT REFERENCES roots(id),
   path TEXT UNIQUE NOT NULL,           -- absolute
   name TEXT NOT NULL,                  -- basename
-  ext TEXT, kind TEXT,                 -- kind: document|image|audio|video
+  ext TEXT, kind TEXT,                 -- kind: document|image|audio|video|archive|folder
   size INT, created_at INT, modified_at INT,
   indexed_at INT,
   fingerprint TEXT,                    -- mtime:size, to skip unchanged files

@@ -11,6 +11,7 @@
 #include "extract/text_extractors.hpp"
 #include "index/database.hpp"
 #include "sweep/crawler.hpp"
+#include "sweep/dir_filter.hpp"
 #include "sweep/fs_watcher.hpp"
 #include "sweep/indexer.hpp"
 
@@ -19,17 +20,21 @@ namespace fs = std::filesystem;
 namespace macassist {
 
 Writer::Writer(std::string db_path, std::vector<std::string> roots,
+               std::unordered_set<std::string> folder_roots,
                std::chrono::seconds reconcile_interval, bool pretend_battery)
     : db_path_(std::move(db_path)),
       reconcile_interval_(reconcile_interval),
       politeness_(pretend_battery) {
   // Canonicalize roots so path-prefix matching lines up with the realpaths
   // FSEvents reports (e.g. /tmp -> /private/tmp). weakly_canonical resolves
-  // the existing portion and leaves the rest; fall back to the raw path.
+  // the existing portion and leaves the rest; fall back to the raw path. The
+  // folder-indexed subset is canonicalized the same way so it matches roots_.
   for (const auto& r : roots) {
     std::error_code ec;
     const fs::path c = fs::weakly_canonical(r, ec);
-    roots_.push_back(ec ? r : c.string());
+    const std::string cpath = ec ? r : c.string();
+    roots_.push_back(cpath);
+    if (folder_roots.count(r) > 0) folder_roots_.insert(cpath);
   }
 }
 
@@ -106,6 +111,16 @@ long long Writer::RootIdForPath(Indexer& idx, const std::string& path) {
   return 0;  // outside the roots -- shouldn't happen for FSEvents paths
 }
 
+bool Writer::IndexFoldersForPath(const std::string& path) const {
+  for (const auto& r : folder_roots_) {
+    if (path.size() >= r.size() && path.compare(0, r.size(), r) == 0 &&
+        (path.size() == r.size() || path[r.size()] == '/')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void Writer::RunFullCrawl(Indexer& idx, const char* reason) {
   // Counters report progress of the current sweep, so reset them each pass.
   status_.scanned.store(0);
@@ -113,7 +128,8 @@ void Writer::RunFullCrawl(Indexer& idx, const char* reason) {
   status_.sweeping.store(true);
   std::fprintf(stderr, "macassistd: %s sweep over %zu root(s)...\n", reason,
                roots_.size());
-  CrawlIncremental(idx, *db_, roots_, status_, stop_, politeness_);
+  CrawlIncremental(idx, *db_, roots_, status_, stop_, politeness_,
+                   folder_roots_);
   status_.sweeping.store(false);
   last_full_pass_ = std::chrono::steady_clock::now();
   std::fprintf(stderr,
@@ -158,8 +174,14 @@ void Writer::ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch) {
         }
         continue;
       }
+      const bool index_folders = IndexFoldersForPath(c.path);
+      // On a folder-indexed root, a package bundle is a single entry whose
+      // internals the crawl never visits -- so a live event for one of those
+      // internals must not index it either (stay consistent with the crawl).
+      if (index_folders && IsInsidePackageBundle(c.path)) continue;
       const long long root_id = RootIdForPath(idx, c.path);
-      if (idx.UpsertFile(c.path, root_id, gen) == Indexer::Result::kMissing) {
+      if (idx.UpsertPath(c.path, root_id, gen, index_folders) ==
+          Indexer::Result::kMissing) {
         idx.TombstoneByPath(c.path);
       }
     }

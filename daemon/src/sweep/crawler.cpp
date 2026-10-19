@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include "index/database.hpp"
+#include "sweep/dir_filter.hpp"
 #include "sweep/indexer.hpp"
 #include "sweep/politeness.hpp"
 #include "sweep/sweep_status.hpp"
@@ -16,23 +17,12 @@
 namespace fs = std::filesystem;
 
 namespace macassist {
-namespace {
-
-// Directory names we never descend into (plus any hidden dir).
-bool IsExcludedDir(const std::string& name) {
-  static const std::unordered_set<std::string> kSkip = {
-      "node_modules", ".git",   ".svn",   ".hg",    "Library",
-      "DerivedData",  ".Trash", ".cache", "Caches", "Applications"};
-  if (!name.empty() && name[0] == '.') return true;  // hidden directories
-  return kSkip.count(name) > 0;
-}
-
-}  // namespace
 
 void CrawlIncremental(Indexer& idx, Database& db,
                       const std::vector<std::string>& roots,
                       SweepStatus& status, const std::atomic<bool>& stop,
-                      const Politeness& politeness) {
+                      const Politeness& politeness,
+                      const std::unordered_set<std::string>& folder_roots) {
   std::string err;
   const long long gen = idx.ReadGen() + 1;
 
@@ -67,6 +57,7 @@ void CrawlIncremental(Indexer& idx, Database& db,
   for (const auto& root : roots) {
     if (stop.load()) break;
     const long long root_id = idx.EnsureRoot(root);
+    const bool index_folders = folder_roots.count(root) > 0;
 
     std::error_code ec;
     auto it = fs::recursive_directory_iterator(
@@ -87,8 +78,24 @@ void CrawlIncremental(Indexer& idx, Database& db,
       std::error_code sec;
 
       if (e.is_directory(sec)) {
-        if (IsExcludedDir(e.path().filename().string())) {
+        const std::string dname = e.path().filename().string();
+        if (IsExcludedDir(dname)) {
           it.disable_recursion_pending();
+          continue;
+        }
+        if (index_folders) {
+          // Index the directory itself as a folder row. A package bundle is a
+          // single entry: index it, but don't descend into its internals.
+          const bool bundle = IsPackageBundle(dname);
+          status.scanned.fetch_add(1, std::memory_order_relaxed);
+          const Indexer::Result r =
+              idx.UpsertDir(e.path().string(), root_id, gen);
+          if (r == Indexer::Result::kInserted || r == Indexer::Result::kUpdated) {
+            status.indexed.fetch_add(1, std::memory_order_relaxed);
+          }
+          if (bundle) it.disable_recursion_pending();
+          maybe_commit();
+          maybe_throttle();
         }
         continue;
       }

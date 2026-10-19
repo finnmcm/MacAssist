@@ -2,7 +2,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "index/database.hpp"
@@ -38,6 +40,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> roots;
   long long reconcile_secs = 86400;  // 24h default (--reconcile-interval)
   bool pretend_battery = false;      // hidden dev flag (--pretend-battery)
+  bool index_folders_all = false;    // dev flag (--index-folders): all roots
 
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -58,6 +61,8 @@ int main(int argc, char** argv) {
       reconcile_secs = std::atoll(next("--reconcile-interval").c_str());
     } else if (a == "--pretend-battery") {
       pretend_battery = true;  // force on-battery extraction policy for testing
+    } else if (a == "--index-folders") {
+      index_folders_all = true;  // index folders in every root (dev/testing)
     } else {
       std::fprintf(stderr, "macassistd: unknown argument: %s\n", a.c_str());
       return 2;
@@ -69,11 +74,24 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // Folders are tracked as search results only in the high-signal user folders
+  // (Desktop/Downloads/Documents); the other roots (Movies/Music/Pictures)
+  // index files only. --index-folders opts every configured root in (useful
+  // when crawling a throwaway corpus via --root).
+  std::unordered_set<std::string> folder_roots;
+  for (const auto& r : roots) {
+    const std::string name = std::filesystem::path(r).filename().string();
+    if (index_folders_all || name == "Desktop" || name == "Downloads" ||
+        name == "Documents") {
+      folder_roots.insert(r);
+    }
+  }
+
   std::string err;
   // The writer owns the read-write connection and runs the sweep on its own
   // long-lived thread. Start() opens + migrates synchronously (so the reader
   // opens against a finished schema), then launches the background crawl.
-  macassist::Writer writer(db_path, roots,
+  macassist::Writer writer(db_path, roots, folder_roots,
                            std::chrono::seconds(reconcile_secs),
                            pretend_battery);
   if (!writer.Start(&err)) {

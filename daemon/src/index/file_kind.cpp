@@ -23,6 +23,8 @@ std::string KindForExtension(const std::string& ext) {
       // video
       {"mp4", "video"},     {"mov", "video"},     {"mkv", "video"},
       {"avi", "video"},     {"m4v", "video"},     {"webm", "video"},
+      // archives (the file itself; contents are not indexed)
+      {"zip", "archive"},
   };
   auto it = kMap.find(ext);
   return (it == kMap.end()) ? std::string() : it->second;

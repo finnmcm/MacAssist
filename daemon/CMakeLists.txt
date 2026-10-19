@@ -10,6 +10,7 @@ add_library(macassistd_core STATIC
   src/index/database.cpp
   src/index/file_kind.cpp
   src/sweep/crawler.cpp
+  src/sweep/dir_filter.cpp
   src/sweep/indexer.cpp
   src/sweep/fs_watcher.mm
   src/sweep/politeness.mm

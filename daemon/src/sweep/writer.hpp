@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "sweep/politeness.hpp"
@@ -42,7 +43,10 @@ struct WriteCommand {
 // one thread, so the write connection is never touched concurrently.
 class Writer {
  public:
+  // `folder_roots` is the subset of `roots` (raw paths) whose directories are
+  // indexed as folder rows; the rest index files only.
   Writer(std::string db_path, std::vector<std::string> roots,
+         std::unordered_set<std::string> folder_roots,
          std::chrono::seconds reconcile_interval, bool pretend_battery = false);
   ~Writer();  // signals stop and joins the thread
 
@@ -68,10 +72,14 @@ class Writer {
   void RunFullCrawl(Indexer& idx, const char* reason);
   void ApplyBatch(Indexer& idx, const std::deque<WriteCommand>& batch);
   long long RootIdForPath(Indexer& idx, const std::string& path);
+  // True if `path` lies under a folder-indexed root (so its directories become
+  // folder rows). Consulted by the FSEvents path.
+  bool IndexFoldersForPath(const std::string& path) const;
   void Enqueue(WriteCommand cmd);
 
   std::string db_path_;
   std::vector<std::string> roots_;  // canonicalized to match FSEvents paths
+  std::unordered_set<std::string> folder_roots_;  // canonical; subset of roots_
   std::chrono::seconds reconcile_interval_;
   std::unique_ptr<Database> db_;  // write connection; thread-owned after Start
   std::unique_ptr<FsWatcher> watcher_;

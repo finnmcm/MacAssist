@@ -3,6 +3,7 @@
 #include <sys/xattr.h>
 
 #include <chrono>
+#include <filesystem>
 #include <string>
 #include <thread>
 
@@ -147,6 +148,63 @@ TEST_CASE("ApplyExtraction persists a resolved downloaded_at, never clobbers",
   idx.ApplyExtraction(r2);
   CHECK(Scalar(*f.db, "SELECT downloaded_at FROM files WHERE id=" +
                           std::to_string(id)) == 1597938752);
+}
+
+TEST_CASE("UpsertFile maps a .zip to the archive kind", "[indexer]") {
+  Fixture f;
+  REQUIRE(f.db != nullptr);
+  Indexer idx(*f.db);
+  const long long root = idx.EnsureRoot(f.corpus(""));
+
+  const std::string path = f.corpus("backup.zip");
+  WriteFile(path, "PK\003\004");  // bytes irrelevant; kind is by extension
+  CHECK(idx.UpsertFile(path, root, 1) == Indexer::Result::kInserted);
+  CHECK(TextScalar(*f.db,
+                   "SELECT kind FROM files WHERE path='" + path + "'") ==
+        "archive");
+}
+
+TEST_CASE("UpsertDir indexes a directory as a folder, no extraction needed",
+          "[indexer][folder]") {
+  Fixture f;
+  REQUIRE(f.db != nullptr);
+  Indexer idx(*f.db);
+  REQUIRE(idx.valid());
+  const long long root = idx.EnsureRoot(f.corpus(""));
+
+  const std::string dir = f.corpus("Job Apps");
+  std::filesystem::create_directories(dir);
+
+  SECTION("a directory becomes a kind=folder row, searchable by name") {
+    CHECK(idx.UpsertDir(dir, root, 1) == Indexer::Result::kInserted);
+    CHECK(TextScalar(*f.db, "SELECT kind FROM files WHERE path='" + dir + "'") ==
+          "folder");
+    // Folders have no body to extract, so they stay out of the pending backlog.
+    CHECK(Scalar(*f.db, "SELECT needs_extract FROM files WHERE path='" + dir +
+                            "'") == 0);
+    CHECK(f.db->CountPending() == 0);
+    // Still name-searchable via its FTS row.
+    CHECK(TextScalar(*f.db, "SELECT name FROM file_text WHERE rowid=(SELECT id "
+                            "FROM files WHERE path='" +
+                                dir + "')") == "Job Apps");
+  }
+
+  SECTION("UpsertDir rejects a regular file; UpsertFile rejects a directory") {
+    const std::string file = f.corpus("resume.txt");
+    WriteFile(file, "hi");
+    CHECK(idx.UpsertDir(file, root, 1) == Indexer::Result::kSkipped);
+    CHECK(idx.UpsertFile(dir, root, 1) == Indexer::Result::kSkipped);
+  }
+
+  SECTION("UpsertPath honors the index_folders gate for directories") {
+    CHECK(idx.UpsertPath(dir, root, 1, /*index_folders=*/false) ==
+          Indexer::Result::kSkipped);
+    CHECK(Scalar(*f.db, "SELECT count(*) FROM files") == 0);
+    CHECK(idx.UpsertPath(dir, root, 1, /*index_folders=*/true) ==
+          Indexer::Result::kInserted);
+    CHECK(TextScalar(*f.db, "SELECT kind FROM files WHERE path='" + dir + "'") ==
+          "folder");
+  }
 }
 
 TEST_CASE("UpsertFile skips non-indexed types and reports missing",

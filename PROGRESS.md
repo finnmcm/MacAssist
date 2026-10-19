@@ -14,12 +14,13 @@ See `PLAN.md` for the full design and rationale.
 |---|---|---|
 | **Phase 1** | Vertical slice: hotkey → panel → daemon → filename FTS → open | ✅ Done (on `main`) |
 | **Phase 2** | Real indexing: live sweeper + content extraction | ✅ Done — bricks 1–6 of 6 (test suite landed) |
-| **Filter toolbar** | Broad layerable filters (kinds/tags/downloaded) + `downloaded_at` signal | ✅ Done — bricks A–C (on `feature/filter-toolbar`, pending merge) |
+| **Filter toolbar** | Broad layerable filters (kinds/tags/downloaded) + `downloaded_at` signal | ✅ Done — bricks A–C (on `main`) |
+| **Folders & zips** | Index directories (Desktop/Downloads/Documents) + `.zip` as first-class `folder`/`archive` kinds | ✅ Done (schema v7) |
 | **Phase 2.5** | Deeper extraction: Vision OCR, office docs (docx/pages), RTF | ⬜ Planned |
 | **Polish** | Settings UI, onboarding + FDA flow, launchd, signing/notarization/DMG | ⬜ Planned |
 | ~~**Intelligence**~~ | ~~AFM `SearchIntent` + CoreML embeddings + two-stage query~~ | ❌ **Dropped** — pivoted away from Apple Intelligence (2026-10-19) |
 
-**Current branch:** `feature/filter-toolbar` (filter toolbar landed, pending merge to `main`). **Schema version:** v6.
+**Current branch:** `main`. **Schema version:** v7.
 
 > **Direction (2026-10-19):** the Apple Intelligence phase (on-device AFM guided
 > generation + CoreML embeddings + semantic/two-stage search) is **no longer on the
@@ -35,9 +36,10 @@ See `PLAN.md` for the full design and rationale.
 |---|---|---|
 | `ipc/socket_server` | Unix-socket accept loop, length-prefixed JSON frames | ✅ works (single-threaded, one conn at a time) |
 | `ipc/request_router` | Routes `ping`/`status`/`query` (incl. `filters`); reads live sweep status | ✅ (`action`/`reindex`/`config` ⬜ not implemented) |
-| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v6, writer/reader split |
-| `sweep/crawler` | Full incremental walk (upsert + fingerprint-skip + tombstone) | ✅ |
-| `sweep/indexer` | Shared per-file upsert / tombstone (cached statements) | ✅ |
+| `index/database` | SQLite open, WAL, schema+migrations, connection roles, meta get/set | ✅ schema v7, writer/reader split |
+| `sweep/crawler` | Full incremental walk (upsert + fingerprint-skip + tombstone); **indexes directories as `folder` rows on opted-in roots, bundles as single entries** | ✅ |
+| `sweep/dir_filter` | Shared dir classification: excluded dirs, package bundles, inside-bundle test (crawl + FSEvents agree) | ✅ |
+| `sweep/indexer` | Shared per-file/dir upsert / tombstone (cached statements); `UpsertFile`/`UpsertDir`/`UpsertPath` | ✅ |
 | `sweep/writer` | Long-lived writer thread: owns RW conn, runs crawl + periodic reconciliation, drains command queue | ✅ |
 | `sweep/fs_watcher` | FSEvents live updates (ObjC++/`.mm`, GCD dispatch queue) | ✅ |
 | `sweep/politeness` | Thermal (NSProcessInfo) + battery (IOKit) sensors; crawl throttle under thermal pressure | ✅ |
@@ -109,6 +111,37 @@ the field and stack with typed text. Shipped as bricks A–C (see `TOOLBAR_PLAN.
   the Music→audio canonical-kind mapping, the untagged-file `json_each('')` guard, the empty-text
   recency order, the quarantine hex-decode + Spotlight fallback + NULL cases, and the
   never-clobber-with-NULL invariant.
+
+### Folders & zips as first-class results (schema v7)
+Two new canonical kinds — **`folder`** and **`archive`** — so directories and `.zip` files show
+up in search with their own icons (SF Symbols `folder` / `doc.zipper`).
+- **Zips → `archive`.** One entry in `file_kind.cpp` (`{"zip","archive"}`). A `.zip` was already
+  crawled as a regular file; it just had an empty kind before. Archive file only — contents are
+  **not** indexed. Indexed in every root (like all files), and already picks up `downloaded_at`
+  from the quarantine xattr.
+- **Folders → `folder`, scoped to Desktop/Downloads/Documents.** The crawl used to skip
+  directories (`is_directory → continue`); now, on a *folder-indexed root*, it upserts the
+  directory as a `kind=folder` row (name/path-searchable, `needs_extract=0` so folders never enter
+  the extraction backlog) and keeps recursing. The other three default roots (Movies/Music/
+  Pictures) index files only. `main.cpp` marks the folder roots by basename; `--index-folders`
+  opts every root in (dev/testing against a `--root` corpus).
+- **Indexer refactor.** `UpsertFile`/`UpsertDir`/`UpsertPath` share one `UpsertStat` body;
+  `needs_extract` is now a bound parameter (1 for files, 0 for folders). `UpsertPath` stats once
+  and dispatches file-vs-dir for the FSEvents handler.
+- **Package bundles are single entries.** New `sweep/dir_filter.{hpp,cpp}` centralizes dir
+  classification (`IsExcludedDir`, `IsPackageBundle`, `IsInsidePackageBundle`) so the crawl and
+  FSEvents agree. On folder roots, a `.app/.pages/.key/.numbers/.photoslibrary/.rtfd` is indexed
+  as one folder row and **not descended into**; FSEvents skips its internals too (consistency).
+  Non-folder roots keep today's behavior (so e.g. Pictures/`.photoslibrary` is unchanged).
+- **Live updates.** The writer carries a canonicalized `folder_roots_` set, passes it to the
+  crawl, and FSEvents events route through `UpsertPath(..., index_folders)` so folder create/
+  rename/delete under the three roots reflects within ~2s. No protocol change — `kind` already
+  travels on `FileHit`; the app only gained two icon cases.
+- **Tests + verification.** Catch2: `.zip → archive`, `UpsertDir` → folder/`needs_extract=0`,
+  the `UpsertPath` index-folders gate, folder-only-on-opt-in crawl, and bundle-as-single-entry
+  (internal `preview.jpg` not indexed). Verified live on a throwaway corpus: `Projects` and
+  `Letter.pages` indexed as `folder`, `backup.zip` as `archive`, the bundle's `preview.jpg`
+  excluded, `pending` stayed 0, and both a folder and the zip surfaced in `mactl query`.
 
 ### Post-Phase-2 features (on `main`)
 - **Finder color tags in results — display-only** (schema v5). A tiny ObjC++ bridge
@@ -232,6 +265,14 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
 ## Known caveats
 
 ### Indexing / search coverage
+- **Folders are indexed only under Desktop/Downloads/Documents** (schema v7). The other three
+  default roots (Movies/Music/Pictures) index files only — a folder there is not a result. A
+  `.pages` (and other `.pages`-style bundles: `.app/.key/.numbers/.photoslibrary/.rtfd`) on a
+  folder root is **one `folder` row**, tagged `kind=folder` (not `document`), and its internals
+  are not indexed. On non-folder roots, bundles keep today's descend-and-index behavior.
+- **Zips are the `.zip` file only — contents are not indexed.** Classified `archive`. A name that
+  lives *inside* a zip won't match. Other archive formats (`.tar/.gz/.dmg/.rar/.7z`) are **not**
+  classified as `archive` yet (trivial to add in `file_kind.cpp`).
 - **Office docs (`docx`/`doc`/`pptx`/`xlsx`/`pages`/`key`), `rtf` are name-only.** They are
   crawled and findable by **filename + folder path**, but their **body text is NOT extracted**
   (the extractor has no bridge for them) — they're stamped `needs_extract=0` so they don't loop.
@@ -255,7 +296,7 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
   counter that **resets to 0 on daemon restart** (it counts applies since process start). To know
   if extraction is complete, watch `pending → 0` in `mactl status`.
 - **Schema bump = nuke-and-rebuild.** Any `kSchemaVersion` change (pre-release policy) drops all
-  tables and re-crawls + re-extracts from scratch. Currently **v6**. This is how Phase 2.5
+  tables and re-crawls + re-extracts from scratch. Currently **v7**. This is how Phase 2.5
   parsers will re-trigger extraction on existing files.
 - **On battery, the old backlog is deferred** (`indexed_at >= now−7d`); only recently-encountered
   files stay current until AC. Freshly-touched/created files still extract on battery. The

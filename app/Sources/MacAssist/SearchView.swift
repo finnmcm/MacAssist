@@ -200,6 +200,8 @@ private struct ResultRow: View {
         case "audio": return "music.note"
         case "video": return "film"
         case "document": return "doc.text"
+        case "folder": return "folder"
+        case "archive": return "doc.zipper"
         default: return "doc"
         }
     }

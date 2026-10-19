@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace macassist {
@@ -17,9 +18,14 @@ struct SweepStatus;
 // moves-away are caught. Updates `status` live, yields under thermal pressure
 // via `politeness`, and returns early if `stop` becomes set (a partial pass
 // skips tombstoning). Commits in batches.
+//
+// Directories under a root listed in `folder_roots` are indexed as folder rows
+// (and package bundles there are indexed as a single entry, not descended
+// into); roots not in the set index files only, as before.
 void CrawlIncremental(Indexer& idx, Database& db,
                       const std::vector<std::string>& roots,
                       SweepStatus& status, const std::atomic<bool>& stop,
-                      const Politeness& politeness);
+                      const Politeness& politeness,
+                      const std::unordered_set<std::string>& folder_roots = {});
 
 }  // namespace macassist

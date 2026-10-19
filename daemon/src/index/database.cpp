@@ -6,7 +6,7 @@
 namespace macassist {
 namespace {
 
-constexpr int kSchemaVersion = 6;
+constexpr int kSchemaVersion = 7;
 
 // Reads meta.schema_version; returns 0 if the meta table or row is absent
 // (e.g. a brand-new database), which forces a rebuild to the current schema.

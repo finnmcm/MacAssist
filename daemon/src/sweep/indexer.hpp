@@ -3,6 +3,8 @@
 
 #include "index/database.hpp"  // Database, Stmt
 
+struct stat;  // <sys/stat.h>, included in the .cpp; passed here by reference
+
 namespace macassist {
 
 struct ExtractResult;
@@ -28,6 +30,18 @@ class Indexer {
   // tombstone it); kSkipped means it exists but is not an indexed file.
   Result UpsertFile(const std::string& path, long long root_id, long long gen);
 
+  // Like UpsertFile, but for a directory: inserts/updates a kind="folder" row
+  // (name/path searchable, needs_extract=0 -- folders have no body to extract).
+  // kSkipped if `path` is not a directory.
+  Result UpsertDir(const std::string& path, long long root_id, long long gen);
+
+  // Dispatch on what `path` actually is (one stat): a directory is upserted as
+  // a folder only when index_folders is set (else kSkipped); a regular file is
+  // upserted as a file. For the FSEvents handler, which gets a bare path and
+  // does not know file-vs-dir up front.
+  Result UpsertPath(const std::string& path, long long root_id, long long gen,
+                    bool index_folders);
+
   // Apply an extraction result: write content/tags into the FTS row, replace
   // the file's file_meta rows, and clear needs_extract -- but only if the
   // file's fingerprint still matches the one the extractor saw (otherwise the
@@ -48,6 +62,12 @@ class Indexer {
   void WriteGen(long long gen);
 
  private:
+  // Shared insert/update body for a file (is_dir=false) or folder (is_dir=true)
+  // whose stat the caller already took. Chooses kind + needs_extract from
+  // is_dir, then runs the sel/insert/update/touch path.
+  Result UpsertStat(const std::string& path, long long root_id, long long gen,
+                    const struct stat& st, bool is_dir);
+
   Database& db_;
   bool valid_ = false;
   Stmt sel_, ins_, insft_, upd_, touch_, set_tags_, set_dl_, tomb_path_,

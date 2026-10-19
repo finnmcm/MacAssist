@@ -17,6 +17,7 @@ namespace fs = std::filesystem;
 using namespace macassist;
 using macassist::test::Scalar;
 using macassist::test::TempDir;
+using macassist::test::TextScalar;
 using macassist::test::WriteFile;
 
 namespace {
@@ -34,6 +35,10 @@ struct CrawlFixture {
   std::string root() const { return (tmp.path() / "root").string(); }
   void crawl(Indexer& idx) {
     CrawlIncremental(idx, *db, {root()}, status, stop, politeness);
+  }
+  // Crawl with the root opted in to folder indexing.
+  void crawlWithFolders(Indexer& idx) {
+    CrawlIncremental(idx, *db, {root()}, status, stop, politeness, {root()});
   }
 };
 }  // namespace
@@ -90,6 +95,58 @@ TEST_CASE("Re-crawl tombstones deletions and picks up new files", "[crawler]") {
     f.crawl(idx);
     CHECK(f.db->CountFiles() == 2);
   }
+}
+
+TEST_CASE("Folders are indexed only when the root opts in", "[crawler][folder]") {
+  CrawlFixture f;
+  REQUIRE(f.db != nullptr);
+  WriteFile((fs::path(f.root()) / "top.txt").string(), "a");
+  WriteFile((fs::path(f.root()) / "Projects" / "note.md").string(), "b");
+  fs::create_directories((fs::path(f.root()) / "Empty Folder").string());
+
+  Indexer idx(*f.db);
+  REQUIRE(idx.valid());
+
+  SECTION("default crawl indexes files only (no folder rows)") {
+    f.crawl(idx);
+    CHECK(Scalar(*f.db, "SELECT count(*) FROM files WHERE kind='folder'") == 0);
+    CHECK(f.db->CountFiles() == 2);  // top.txt + Projects/note.md
+  }
+
+  SECTION("opted-in crawl also indexes directories as folder rows") {
+    f.crawlWithFolders(idx);
+    // Both the "Projects" and "Empty Folder" directories become folder rows.
+    CHECK(Scalar(*f.db, "SELECT count(*) FROM files WHERE kind='folder'") == 2);
+    CHECK(Scalar(*f.db,
+                 "SELECT count(*) FROM files WHERE path LIKE '%Empty Folder'") ==
+          1);
+    // Folders don't enter the extraction backlog -- only the 2 files do.
+    CHECK(f.db->CountPending() == 2);
+  }
+}
+
+TEST_CASE("A package bundle is one folder row, not descended into",
+          "[crawler][folder]") {
+  CrawlFixture f;
+  REQUIRE(f.db != nullptr);
+  // A .pages bundle with an internal image that WOULD be an indexed type if we
+  // descended into it.
+  const fs::path bundle = fs::path(f.root()) / "Letter.pages";
+  WriteFile((bundle / "preview.jpg").string(), "jpegbytes");
+  WriteFile((bundle / "index.xml").string(), "<doc/>");
+
+  Indexer idx(*f.db);
+  REQUIRE(idx.valid());
+  f.crawlWithFolders(idx);
+
+  // The bundle itself is one folder row...
+  CHECK(Scalar(*f.db, "SELECT count(*) FROM files WHERE path LIKE '%Letter.pages'") ==
+        1);
+  CHECK(TextScalar(*f.db, "SELECT kind FROM files WHERE path LIKE '%Letter.pages'") ==
+        "folder");
+  // ...and its internals are not indexed (not descended into).
+  CHECK(Scalar(*f.db, "SELECT count(*) FROM files WHERE path LIKE '%preview.jpg'") ==
+        0);
 }
 
 TEST_CASE("A stopped crawl does not mass-tombstone unreached files",

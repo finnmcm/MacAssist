@@ -43,19 +43,20 @@ Indexer::Indexer(Database& db) : db_(db) {
   ins_ = Stmt(db_.handle(),
               "INSERT INTO files"
               "(root_id,path,name,ext,kind,size,created_at,modified_at,"
-              " indexed_at,fingerprint,missing,seen_gen,tags_json)"
-              " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12)",
+              " indexed_at,fingerprint,missing,seen_gen,tags_json,needs_extract)"
+              " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11,?12,?13)",
               &err);
   insft_ = Stmt(db_.handle(),
                 "INSERT INTO file_text(rowid,name,path_tokens,content,tags)"
                 " VALUES(?1,?2,?3,'','')",
                 &err);
-  // A fingerprint change re-flags the file for extraction (needs_extract=1);
-  // the extractor will refresh its content/tags/meta.
+  // A fingerprint change re-flags the file for extraction (needs_extract bound
+  // to 1 for files); the extractor will refresh its content/tags/meta. Folders
+  // bind 0 -- they have no body to extract.
   upd_ = Stmt(db_.handle(),
               "UPDATE files SET size=?1,created_at=?2,modified_at=?3,"
               " indexed_at=?4,fingerprint=?5,missing=0,seen_gen=?6,"
-              " needs_extract=1,tags_json=?8 WHERE id=?7",
+              " needs_extract=?9,tags_json=?8 WHERE id=?7",
               &err);
   touch_ = Stmt(db_.handle(),
                 "UPDATE files SET missing=0,seen_gen=?1 WHERE id=?2", &err);
@@ -116,10 +117,44 @@ Indexer::Result Indexer::UpsertFile(const std::string& path, long long root_id,
   struct stat st{};
   if (::stat(path.c_str(), &st) != 0) return Result::kMissing;
   if (!S_ISREG(st.st_mode)) return Result::kSkipped;
+  return UpsertStat(path, root_id, gen, st, /*is_dir=*/false);
+}
 
-  const std::string ext = LowerExt(path);
-  const std::string kind = KindForExtension(ext);
-  if (kind.empty()) return Result::kSkipped;  // exists, but not an indexed type
+Indexer::Result Indexer::UpsertDir(const std::string& path, long long root_id,
+                                   long long gen) {
+  struct stat st{};
+  if (::stat(path.c_str(), &st) != 0) return Result::kMissing;
+  if (!S_ISDIR(st.st_mode)) return Result::kSkipped;
+  return UpsertStat(path, root_id, gen, st, /*is_dir=*/true);
+}
+
+Indexer::Result Indexer::UpsertPath(const std::string& path, long long root_id,
+                                    long long gen, bool index_folders) {
+  struct stat st{};
+  if (::stat(path.c_str(), &st) != 0) return Result::kMissing;
+  if (S_ISDIR(st.st_mode)) {
+    if (!index_folders) return Result::kSkipped;
+    return UpsertStat(path, root_id, gen, st, /*is_dir=*/true);
+  }
+  if (!S_ISREG(st.st_mode)) return Result::kSkipped;
+  return UpsertStat(path, root_id, gen, st, /*is_dir=*/false);
+}
+
+Indexer::Result Indexer::UpsertStat(const std::string& path, long long root_id,
+                                    long long gen, const struct stat& st,
+                                    bool is_dir) {
+  std::string ext;
+  std::string kind;
+  // Files flag themselves for extraction; folders have no body, so they skip
+  // it (and stay out of the extractor's pending backlog).
+  const int needs_extract = is_dir ? 0 : 1;
+  if (is_dir) {
+    kind = "folder";
+  } else {
+    ext = LowerExt(path);
+    kind = KindForExtension(ext);
+    if (kind.empty()) return Result::kSkipped;  // exists, not an indexed type
+  }
 
   const std::string name = fs::path(path).filename().string();
   const long long size = static_cast<long long>(st.st_size);
@@ -158,6 +193,7 @@ Indexer::Result Indexer::UpsertFile(const std::string& path, long long root_id,
     sqlite3_bind_text(s, 10, fp.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(s, 11, gen);
     sqlite3_bind_text(s, 12, tags.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(s, 13, needs_extract);
     // downloaded_at is left NULL here and resolved later by the extractor
     // (off the writer thread); see ApplyExtraction.
     if (sqlite3_step(s) != SQLITE_DONE) return Result::kSkipped;
@@ -184,9 +220,11 @@ Indexer::Result Indexer::UpsertFile(const std::string& path, long long root_id,
     sqlite3_bind_int64(s, 6, gen);
     sqlite3_bind_int64(s, 7, existing_id);
     sqlite3_bind_text(s, 8, tags.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(s, 9, needs_extract);
     sqlite3_step(s);
-    // needs_extract is re-set by upd_, so the extractor re-resolves
-    // downloaded_at on a content change (e.g. a re-download) too.
+    // For files, needs_extract is re-set to 1 by upd_, so the extractor
+    // re-resolves content/downloaded_at on a change (e.g. a re-download);
+    // folders bind 0.
     return Result::kUpdated;
   }
 

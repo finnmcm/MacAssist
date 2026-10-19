@@ -56,7 +56,8 @@ TEST_CASE("Writer + Extractor index and extract content end-to-end",
   expected += (has_pdf ? 1 : 0) + (has_jpg ? 1 : 0) + (has_m4a ? 1 : 0);
 
   const std::string db_path = tmp.file("index.db");
-  Writer writer(db_path, {corpus.string()}, std::chrono::seconds(2));
+  Writer writer(db_path, {corpus.string()}, /*folder_roots=*/{},
+                std::chrono::seconds(2));
   std::string err;
   REQUIRE(writer.Start(&err));
 
@@ -88,7 +89,8 @@ TEST_CASE("Editing a file re-extracts its new content", "[extraction][integratio
   WriteFile(note, "original kryptonite body\n");
 
   const std::string db_path = tmp.file("index.db");
-  Writer writer(db_path, {corpus.string()}, std::chrono::seconds(2));
+  Writer writer(db_path, {corpus.string()}, /*folder_roots=*/{},
+                std::chrono::seconds(2));
   std::string err;
   REQUIRE(writer.Start(&err));
   auto ro = Database::Open(db_path, Access::ReadOnly, &err);

@@ -22,6 +22,8 @@ TEST_CASE("KindForExtension maps known extensions to kinds", "[file_kind]") {
   CHECK(KindForExtension("mp4") == "video");
   CHECK(KindForExtension("mov") == "video");
   CHECK(KindForExtension("mkv") == "video");
+
+  CHECK(KindForExtension("zip") == "archive");
 }
 
 TEST_CASE("KindForExtension rejects unknown and malformed input", "[file_kind]") {
