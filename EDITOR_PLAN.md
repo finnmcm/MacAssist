@@ -158,11 +158,12 @@ extension → empty.
 - **Configurable terminal type.** Support non-standard terminals (Alacritty / kitty / WezTerm /
   Ghostty / …) via a user-supplied terminal command or launch template, instead of only the
   built-in Terminal.app / iTerm hosts.
-- **Hide editors that aren't installed.** Only list catalog entries the user actually has.
-  Tractable for GUI editors (resolve via bundle id / LaunchServices); terminal commands are
-  harder to detect from the app — an `LSUIElement` process has a restricted PATH and the command
-  only needs to exist inside the terminal's own shell — so those likely stay always-shown or get
-  a best-effort check. (Today the catalog is static regardless of install state.)
+- **Hide uninstalled *terminal* editors.** GUI editors are already hidden when not installed
+  (bundle-id / LaunchServices resolution; the active selection stays visible regardless).
+  Terminal commands are harder to detect from the app — an `LSUIElement` process has a restricted
+  PATH and the command only needs to exist inside the terminal's own shell — so vim/nvim/nano/
+  emacs are still always shown; a best-effort probe (e.g. the user's login shell) is the open
+  piece.
 - **Grep / code content search** — whitelist code extensions in the `plain_text` extractor so
   code bodies enter FTS. Deliberately deferred.
 - Extensionless dev files (`Makefile`, `Dockerfile`) via basename classification.

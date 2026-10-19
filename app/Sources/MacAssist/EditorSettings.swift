@@ -18,12 +18,27 @@ enum EditorKind: String, Sendable {
 // One selectable editor. For `.terminal`, `launchTarget` is the command to run
 // (resolved on the shell's PATH inside the terminal). For `.gui`, it is the
 // application name passed to `open -a` / NSWorkspace (not a CLI, to avoid the
-// PATH an LSUIElement app lacks).
+// PATH an LSUIElement app lacks). `bundleIds` are used only to detect whether a
+// GUI editor is installed (any one resolving ⇒ installed); several are listed
+// where the id varies by version/distribution.
 struct EditorChoice: Identifiable, Equatable, Sendable {
     let id: String
     let displayName: String
     let kind: EditorKind
     let launchTarget: String
+    var bundleIds: [String] = []
+
+    // Whether to offer this editor in the menu. Terminal editors are always
+    // offered: their command lives on the terminal's shell PATH, which an
+    // LSUIElement app can't reliably probe. GUI editors are "installed" when any
+    // of their bundle ids resolves via LaunchServices (so uninstalled apps are
+    // hidden). A GUI entry with no bundle ids is left visible rather than hidden.
+    var isInstalled: Bool {
+        if kind == .terminal || bundleIds.isEmpty { return true }
+        return bundleIds.contains {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
+        }
+    }
 }
 
 extension EditorChoice {
@@ -33,12 +48,18 @@ extension EditorChoice {
         .init(id: "nvim",     displayName: "Neovim",       kind: .terminal, launchTarget: "nvim"),
         .init(id: "nano",     displayName: "nano",         kind: .terminal, launchTarget: "nano"),
         .init(id: "emacs",    displayName: "Emacs",        kind: .terminal, launchTarget: "emacs"),
-        .init(id: "vscode",   displayName: "VS Code",      kind: .gui,      launchTarget: "Visual Studio Code"),
-        .init(id: "cursor",   displayName: "Cursor",       kind: .gui,      launchTarget: "Cursor"),
-        .init(id: "zed",      displayName: "Zed",          kind: .gui,      launchTarget: "Zed"),
-        .init(id: "sublime",  displayName: "Sublime Text", kind: .gui,      launchTarget: "Sublime Text"),
-        .init(id: "xcode",    displayName: "Xcode",        kind: .gui,      launchTarget: "Xcode"),
-        .init(id: "textedit", displayName: "TextEdit",     kind: .gui,      launchTarget: "TextEdit"),
+        .init(id: "vscode",   displayName: "VS Code",      kind: .gui,      launchTarget: "Visual Studio Code",
+              bundleIds: ["com.microsoft.VSCode"]),
+        .init(id: "cursor",   displayName: "Cursor",       kind: .gui,      launchTarget: "Cursor",
+              bundleIds: ["com.todesktop.230313mzl4w4u92"]),
+        .init(id: "zed",      displayName: "Zed",          kind: .gui,      launchTarget: "Zed",
+              bundleIds: ["dev.zed.Zed"]),
+        .init(id: "sublime",  displayName: "Sublime Text", kind: .gui,      launchTarget: "Sublime Text",
+              bundleIds: ["com.sublimetext.4", "com.sublimetext.3"]),
+        .init(id: "xcode",    displayName: "Xcode",        kind: .gui,      launchTarget: "Xcode",
+              bundleIds: ["com.apple.dt.Xcode"]),
+        .init(id: "textedit", displayName: "TextEdit",     kind: .gui,      launchTarget: "TextEdit",
+              bundleIds: ["com.apple.TextEdit"]),
     ]
 
     static let defaultChoice = catalog[0]  // vim

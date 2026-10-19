@@ -108,6 +108,10 @@ the panel. Full design + the Devil's Advocate review in `EDITOR_PLAN.md`.
   `PanelController`; `Enter` still reveals, `⌘Enter` still opens the all-results folder. Added
   the **Code** toolbar filter + `</>` icon. A result-row click now only highlights (it used to
   reveal-in-Finder + dismiss).
+- **Installed-only GUI editors.** The "Default Editor" menu lists a GUI editor only when one of
+  its bundle ids resolves via LaunchServices (verified live: VS Code / Cursor / Xcode / TextEdit
+  shown, Sublime / Zed hidden when absent). Terminal editors are always shown (not reliably
+  probeable from an `LSUIElement` app); the active selection stays visible even if uninstalled.
 - **Verified (daemon half) on a throwaway corpus:** `.py/.swift/.go/.json/.html/.css` index as
   `code` and are name-searchable via `mactl query`; `md/csv/txt/pdf` stay `document`, `png`
   image, unknown `.xyz` still skipped; `pending → 0` (no extraction loop). App compiles +
@@ -267,11 +271,11 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
   - **Configurable terminal type.** Let the user point at a non-standard terminal
     (Alacritty / kitty / WezTerm / Ghostty / …) via a custom terminal command or launch
     template, rather than only the built-in Terminal.app / iTerm hosts.
-  - **Hide editors that aren't installed.** Only list catalog entries the user actually has.
-    Tractable for GUI editors (resolve via bundle id / LaunchServices); terminal commands are
-    harder to detect from the app — an `LSUIElement` process has a restricted PATH and the
-    command only needs to exist inside the terminal's own shell — so those likely stay
-    always-shown or get a best-effort check.
+  - **Hide uninstalled *terminal* editors.** GUI editors are already filtered by install state
+    (bundle-id / LaunchServices resolution). Terminal commands remain hard to detect from the
+    app — an `LSUIElement` process has a restricted PATH and the command only needs to exist in
+    the terminal's own shell — so vim/nvim/nano/emacs are still always shown; a best-effort
+    probe (e.g. querying the user's login shell) is the open piece.
   - **Code content search ("grep").** Still deferred: whitelist code extensions in the
     `plain_text` extractor so code bodies enter FTS (code is name-only today).
 - **Phase 2.5 — deeper extraction:** Vision OCR for image-only PDFs/images; office-doc
@@ -315,9 +319,11 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
 - **Settings are reachable only from the menu-bar "Default Editor" submenu.** If the menu-bar
   icon is hidden (notch / crowded bar), the editor can still be set directly, e.g.
   `defaults write com.finn.macassist editor.selectedId <id>` (`vim`/`nvim`/`vscode`/`zed`/…).
-- **The catalog lists editors regardless of install state** (installed-only filtering is a
-  planned follow-on). Picking an uninstalled GUI editor surfaces "Couldn't launch … — is it
-  installed?" rather than hiding it.
+- **Uninstalled GUI editors are hidden; terminal editors are always listed.** A GUI editor is
+  offered only if one of its bundle ids resolves via LaunchServices; the active selection stays
+  visible even if uninstalled (so its checkmark doesn't vanish). Terminal editors (vim/nvim/…)
+  can't be reliably probed from an `LSUIElement` app (restricted PATH; the command only needs to
+  exist in the terminal's shell), so they're always shown — detecting those is a follow-on.
 - **Terminal editors need Automation (Apple Events) permission.** The first ⌘E into a terminal
   editor triggers a TCC prompt to control Terminal/iTerm; on denial the panel shows a
   "Privacy › Automation" hint and nothing opens.

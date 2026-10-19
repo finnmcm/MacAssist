@@ -79,7 +79,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let current = settings.current
         menu.removeAllItems()
 
-        for choice in EditorChoice.catalog {
+        // Only offer installed editors (GUI editors resolve via LaunchServices;
+        // terminal editors are always installed). The active selection is kept
+        // visible even if it's an uninstalled GUI editor, so its checkmark and
+        // name don't silently vanish.
+        for choice in EditorChoice.catalog
+        where choice.isInstalled || choice.id == settings.selectedId {
             let mi = NSMenuItem(title: choice.displayName,
                                 action: #selector(selectEditor(_:)), keyEquivalent: "")
             mi.target = self
