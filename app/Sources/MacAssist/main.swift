@@ -4,11 +4,15 @@ import AppKit
 // global hotkey summons the search panel; the menu bar item carries status
 // and Quit. See PLAN.md section 7.
 @MainActor
-final class AppController: NSObject, NSApplicationDelegate {
+final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var hotKey: HotKey?
     private var panel: PanelController?
     private let model = SearchModel(client: DaemonClient(socketPath: Proto.socketPath))
+
+    // The "Default Editor ▸" submenu. Rebuilt on each open (menuNeedsUpdate)
+    // so checkmarks, the custom label, and the terminal-host state stay live.
+    private let editorSubmenu = NSMenu()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(model: model)
@@ -43,6 +47,15 @@ final class AppController: NSObject, NSApplicationDelegate {
                      action: #selector(openPanel), keyEquivalent: "")
             .target = self
         menu.addItem(.separator())
+
+        // Default Editor ▸ — the open-in-editor preference (EDITOR_PLAN.md).
+        editorSubmenu.delegate = self          // rebuilt lazily on open
+        editorSubmenu.autoenablesItems = false  // we manage enabled/checkmarks
+        let editorItem = NSMenuItem(title: "Default Editor", action: nil, keyEquivalent: "")
+        editorItem.submenu = editorSubmenu
+        menu.addItem(editorItem)
+
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit MacAssist",
                      action: #selector(NSApplication.terminate(_:)),
                      keyEquivalent: "q")
@@ -53,6 +66,102 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     @objc private func openPanel() {
         panel?.show()
+    }
+
+    // MARK: - Default Editor submenu
+
+    // Rebuild the submenu just before it opens, so checkmarks / the custom
+    // label / the terminal-host enabled state reflect the current preference
+    // (and a newly-installed iTerm appears).
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === editorSubmenu else { return }
+        let settings = EditorSettings.shared
+        let current = settings.current
+        menu.removeAllItems()
+
+        for choice in EditorChoice.catalog {
+            let mi = NSMenuItem(title: choice.displayName,
+                                action: #selector(selectEditor(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = choice.id
+            mi.state = (settings.selectedId == choice.id) ? .on : .off
+            menu.addItem(mi)
+        }
+
+        menu.addItem(.separator())
+
+        let isCustom = settings.selectedId == EditorChoice.customId
+        let customTitle = (isCustom && !settings.customCommand.isEmpty)
+            ? "Custom: \(settings.customCommand)…" : "Custom…"
+        let customItem = NSMenuItem(title: customTitle,
+                                    action: #selector(editCustomEditor), keyEquivalent: "")
+        customItem.target = self
+        customItem.state = isCustom ? .on : .off
+        menu.addItem(customItem)
+
+        // Terminal host — only meaningful when the selected editor is a
+        // terminal editor, so the parent is disabled otherwise.
+        menu.addItem(.separator())
+        let hostParent = NSMenuItem(title: "Terminal App", action: nil, keyEquivalent: "")
+        let hostMenu = NSMenu()
+        hostMenu.autoenablesItems = false
+        for host in TerminalHost.allCases where host.isInstalled {
+            let hi = NSMenuItem(title: host.displayName,
+                                action: #selector(selectTerminalHost(_:)), keyEquivalent: "")
+            hi.target = self
+            hi.representedObject = host.rawValue
+            hi.state = (settings.terminalHost == host) ? .on : .off
+            hostMenu.addItem(hi)
+        }
+        hostParent.submenu = hostMenu
+        hostParent.isEnabled = current.kind == .terminal
+        menu.addItem(hostParent)
+    }
+
+    @objc private func selectEditor(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        EditorSettings.shared.selectedId = id
+    }
+
+    @objc private func selectTerminalHost(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let host = TerminalHost(rawValue: raw) else { return }
+        EditorSettings.shared.terminalHost = host
+    }
+
+    // A tiny prompt for a custom command + whether it runs in a terminal.
+    // Saving a non-empty command also selects "Custom" as the active editor.
+    @objc private func editCustomEditor() {
+        let settings = EditorSettings.shared
+        let alert = NSAlert()
+        alert.messageText = "Custom Editor"
+        alert.informativeText =
+            "Command (terminal) or application name (GUI) to open files with."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 26, width: 260, height: 24))
+        field.stringValue = settings.customCommand
+        field.placeholderString = "e.g. vim, code, Sublime Text"
+
+        let checkbox = NSButton(checkboxWithTitle: "Runs in a terminal",
+                                target: nil, action: nil)
+        checkbox.frame = NSRect(x: 0, y: 0, width: 260, height: 18)
+        checkbox.state = settings.customRunsInTerminal ? .on : .off
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 50))
+        accessory.addSubview(field)
+        accessory.addSubview(checkbox)
+        alert.accessoryView = accessory
+
+        NSApp.activate(ignoringOtherApps: true)
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let cmd = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.customCommand = cmd
+        settings.customRunsInTerminal = checkbox.state == .on
+        if !cmd.isEmpty { settings.selectedId = EditorChoice.customId }
     }
 }
 

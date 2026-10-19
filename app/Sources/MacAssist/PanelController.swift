@@ -144,6 +144,9 @@ final class PanelController {
         case 8 where cmd:  // ⌘C — copy selected path
             model.copySelectedPath()
             return true
+        case 14 where cmd:  // ⌘E — open selected file in the chosen editor
+            model.openInEditor()
+            return true
         case 51 where model.queryText.isEmpty && model.hasFilters:
             // Backspace on an empty field removes the last filter chip; when
             // the field has text we pass it through so the TextField deletes.

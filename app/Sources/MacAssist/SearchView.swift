@@ -63,6 +63,7 @@ struct SearchView: View {
             toolbarButton("Videos", .kind("video"))
             toolbarButton("Music", .kind("audio"))
             toolbarButton("Documents", .kind("document"))
+            toolbarButton("Code", .kind("code"))
             tagsMenu
             Spacer()
         }
@@ -126,7 +127,11 @@ struct SearchView: View {
                             .frame(height: PanelMetrics.rowHeight)
                             .id(index)
                             .contentShape(Rectangle())
-                            .onTapGesture { model.reveal(model.results[index]) }
+                            // A click only highlights the row; revealing/opening
+                            // stays on the explicit keys (Enter reveals, ⌘E
+                            // opens in the editor) so a click never yanks focus
+                            // to Finder.
+                            .onTapGesture { model.selection = index }
                     }
                 }
                 .padding(.vertical, PanelMetrics.listVPadding / 2)
@@ -200,6 +205,7 @@ private struct ResultRow: View {
         case "audio": return "music.note"
         case "video": return "film"
         case "document": return "doc.text"
+        case "code": return "chevron.left.forwardslash.chevron.right"
         case "folder": return "folder"
         case "archive": return "doc.zipper"
         default: return "doc"
@@ -286,6 +292,7 @@ private enum FilterLabels {
         case "video": return "Videos"
         case "audio": return "Music"
         case "document": return "Documents"
+        case "code": return "Code"
         default: return kind.capitalized
         }
     }

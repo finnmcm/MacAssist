@@ -171,6 +171,34 @@ final class SearchModel: ObservableObject {
         onDismiss?()
     }
 
+    // ⌘E: open the selected hit in the user's chosen editor (EDITOR_PLAN.md).
+    // Only code/text files are eligible; anything else gets a subtle message
+    // and the panel stays up. The launch runs off the main thread because the
+    // first terminal launch blocks on the system Automation permission prompt;
+    // success dismisses, failure shows the launcher's message.
+    func openInEditor() {
+        guard results.indices.contains(selection) else { return }
+        let hit = results[selection]
+        guard EditorEligibility.isEditable(kind: hit.kind, path: hit.path) else {
+            status = "Not a text file"
+            return
+        }
+        let choice = EditorSettings.shared.current
+        let host = EditorSettings.shared.terminalHost
+        let path = hit.path
+        Task.detached(priority: .userInitiated) {
+            let result = EditorLauncher.launch(
+                path: path, choice: choice, terminalHost: host)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .success: self.onDismiss?()
+                case .failure(let err): self.status = err.userMessage
+                }
+            }
+        }
+    }
+
     // ⌘C: copy the selected path. Deliberately does not dismiss — copying is
     // often a prelude to another action in the same session.
     func copySelectedPath() {

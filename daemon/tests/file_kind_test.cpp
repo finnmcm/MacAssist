@@ -24,6 +24,26 @@ TEST_CASE("KindForExtension maps known extensions to kinds", "[file_kind]") {
   CHECK(KindForExtension("mkv") == "video");
 
   CHECK(KindForExtension("zip") == "archive");
+
+  // source code
+  CHECK(KindForExtension("py") == "code");
+  CHECK(KindForExtension("js") == "code");
+  CHECK(KindForExtension("ts") == "code");
+  CHECK(KindForExtension("swift") == "code");
+  CHECK(KindForExtension("cpp") == "code");
+  CHECK(KindForExtension("go") == "code");
+  CHECK(KindForExtension("rs") == "code");
+  CHECK(KindForExtension("sh") == "code");
+  // config / markup are intentionally "code", not "document"
+  CHECK(KindForExtension("json") == "code");
+  CHECK(KindForExtension("yaml") == "code");
+  CHECK(KindForExtension("xml") == "code");
+  CHECK(KindForExtension("html") == "code");
+  CHECK(KindForExtension("css") == "code");
+
+  // text/markdown stay "document" -- editor-eligible app-side, not "code"
+  CHECK(KindForExtension("txt") == "document");
+  CHECK(KindForExtension("md") == "document");
 }
 
 TEST_CASE("KindForExtension rejects unknown and malformed input", "[file_kind]") {
