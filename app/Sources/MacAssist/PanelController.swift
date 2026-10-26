@@ -35,28 +35,26 @@ final class PanelController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .utilityWindow
 
-        // Blur material behind rounded-corner SwiftUI content.
-        let blur = NSVisualEffectView()
-        blur.material = .hudWindow
-        blur.state = .active
-        blur.blendingMode = .behindWindow
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 14
-        blur.layer?.masksToBounds = true
-
+        // Background material behind the rounded-corner SwiftUI content.
         let host = NSHostingView(rootView: SearchView(model: model))
-        host.translatesAutoresizingMaskIntoConstraints = false
-        blur.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-            host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-            host.topAnchor.constraint(equalTo: blur.topAnchor),
-            host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
-        ])
-        panel.contentView = blur
+        panel.contentView = Self.makeBackground(hosting: host)
 
         // Actions that open something close the panel.
         model.onDismiss = { [weak self] in self?.hide() }
+
+        // Spotlight-style dismissal: when the user clicks another application
+        // (so our app resigns active), close the panel. show() activates the
+        // app, so this fires on any switch away — but not when interacting with
+        // our own panel or menus (those don't deactivate the app). Guarded on
+        // isVisible so it's a no-op when the panel is already hidden.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.panel.isVisible else { return }
+                    self.hide()
+                }
+            }
 
         // Grow/shrink the window to fit the results as they change, keeping
         // the top edge anchored. Deferred to the next run loop so the model's
@@ -69,6 +67,40 @@ final class PanelController {
                     rowCount: results.count, hasStatus: !status.isEmpty))
             }
             .store(in: &cancellables)
+    }
+
+    // The panel's background material, with the SwiftUI content hosted inside.
+    //
+    // This is the single seam for the deferred Liquid Glass work: today it's an
+    // NSVisualEffectView blur (available back to macOS 14); on macOS 26 (Tahoe)
+    // swap the body for NSGlassEffectView to get Liquid Glass. That swap also
+    // needs Package.swift bumped to .macOS(.v26) and the Xcode 26 SDK — see
+    // PROGRESS.md "Liquid Glass (deferred)". Keeping all material-specific
+    // wiring in this one function is what makes the later change localized:
+    //
+    //   let glass = NSGlassEffectView()
+    //   glass.cornerRadius = 14
+    //   glass.contentView = host   // NSGlassEffectView hosts via .contentView,
+    //   return glass               // so the manual constraints below aren't needed
+    //
+    private static func makeBackground(hosting host: NSView) -> NSView {
+        let blur = NSVisualEffectView()
+        blur.material = .hudWindow
+        blur.state = .active
+        blur.blendingMode = .behindWindow
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 14
+        blur.layer?.masksToBounds = true
+
+        host.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+            host.topAnchor.constraint(equalTo: blur.topAnchor),
+            host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+        ])
+        return blur
     }
 
     var isVisible: Bool { panel.isVisible }

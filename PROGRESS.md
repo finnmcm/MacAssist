@@ -210,6 +210,11 @@ the Direction note above; `PLAN.md` §4 keeps the rationale).
   pptx/xlsx) + RTF body text. Re-triggers via the schema-bump nuke-rebuild.
 - **Filter toolbar follow-ons:** "only colors actually in use" Tags popover (needs a distinct-tags
   query); more filter kinds (date ranges, size, specific folders/roots).
+- **Liquid Glass (deferred — 2026-10-26):** swap the panel's `NSVisualEffectView` blur for macOS 26
+  `NSGlassEffectView`, and glass-style the toolbar capsules (SwiftUI `.glassEffect` /
+  `GlassEffectContainer`). **Blocked on toolchain:** needs macOS 26 Tahoe + Xcode 26 SDK and a
+  `Package.swift` bump to `.macOS(.v26)` (dev box is on Sonoma 14.5 / Xcode 16, SDK ≤ 15.1 — the
+  glass APIs don't exist there). The swap seam is isolated to `PanelController.makeBackground`.
 - **Richer result interactions:** Quick Look preview, drag-out, more per-row actions.
 - **`action` / `reindex` / `config` IPC:** wire up the router verbs the daemon stubs today.
 - **Product polish:** settings UI, onboarding + FDA flow, launchd install/upgrade, signing +
