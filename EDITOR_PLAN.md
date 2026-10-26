@@ -1,7 +1,7 @@
 # MacAssist — "Open in Editor" (developer support)
 
 *Feature plan. Read alongside `PLAN.md` (authoritative design) and `PROGRESS.md` (status).
-Follows the `TOOLBAR_PLAN.md` per-feature convention. Finalized 2026-10-19.*
+Follows the repo's per-feature plan convention. Finalized 2026-10-19.*
 
 Let developers open any code / text / Markdown result in the terminal or IDE of their
 choice, straight from the search panel. Default editor is **vim** (in Terminal.app),

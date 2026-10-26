@@ -137,14 +137,14 @@ hits. Daemon did a one-shot stat-only crawl at startup; name-only FTS. (See git 
 
 ### Filter toolbar (on `feature/filter-toolbar`, pending merge)
 A broad, layerable filter toolbar under the search field; active filters render as chips inside
-the field and stack with typed text. Shipped as bricks A–C (see `TOOLBAR_PLAN.md`):
+the field and stack with typed text. Shipped as bricks A–C:
 - **Brick A — schema v6 + `downloaded_at` signal** (`09c99e3`). New `files.downloaded_at`
   column, resolved **in the extractor** (not the hot stat/crawl path) via a new
   `extract/download_date.mm` bridge: quarantine xattr (`flags;hex-epoch;agent;uuid`, hex-decode
   field 2) as the fast path → `kMDItemDownloadedDate` (Spotlight) fallback. `ApplyExtraction`
   **never clobbers a known date with NULL**. Partial index on `downloaded_at`, plus an index on
   `modified_at` for the recency sort. **Empirical caveat:** on real data the quarantine xattr
-  carries the feature (~97% of `~/Downloads`), not Spotlight — see Known caveats + `TOOLBAR_PLAN.md` §1.
+  carries the feature (~97% of `~/Downloads`), not Spotlight — see Known caveats.
 - **Brick B — query-engine filters + protocol** (`09c99e3`). `SearchFiles` takes a `QueryFilters`
   (defaulted empty so old callers compile): `kinds` → `f.kind IN (…)`, `tag_colors` → guarded
   `json_each(tags_json)` EXISTS walk (the `tags_json <> '' AND json_valid(...)` guard is
@@ -277,8 +277,7 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
 **not** the roadmap.
 
 ### Immediate (merge + stabilize)
-- **Merge `feature/filter-toolbar` → `main`** once verified end-to-end against a running daemon
-  (the Brick C manual checklist in `TOOLBAR_PLAN.md`).
+- **Merge `feature/filter-toolbar` → `main`** once verified end-to-end against a running daemon.
 
 ### Feature backlog (unordered — pick next)
 - **Open-in-Editor follow-ons** (see `EDITOR_PLAN.md` §7):
@@ -370,7 +369,7 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
   and it persisted durably, while **`kMDItemDownloadedDate` was populated for ~zero** files. Both
   code paths are correct, but effective coverage is really "files that still have a quarantine
   xattr" (~97% here), *not* the universal "Spotlight source of truth" the plan assumed — a file
-  with neither signal is not flagged as a download. See `TOOLBAR_PLAN.md` §1.
+  with neither signal is not flagged as a download.
 
 ### Extraction engine — things to remember
 - **`pending` is the durable truth; `extractedFiles` is not.** `extractedFiles` is an in-memory
