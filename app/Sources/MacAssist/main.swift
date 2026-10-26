@@ -99,12 +99,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hostParent = NSMenuItem(title: "Terminal App", action: nil, keyEquivalent: "")
         let hostMenu = NSMenu()
         hostMenu.autoenablesItems = false
-        for host in TerminalHost.allCases where host.isInstalled {
+        // Only installed terminals (Terminal.app always resolves); the active
+        // selection stays visible even if its app was removed, mirroring the
+        // editor list above.
+        for host in TerminalHost.catalog
+        where host.isInstalled || host.id == settings.terminalHost.id {
             let hi = NSMenuItem(title: host.displayName,
                                 action: #selector(selectTerminalHost(_:)), keyEquivalent: "")
             hi.target = self
-            hi.representedObject = host.rawValue
-            hi.state = (settings.terminalHost == host) ? .on : .off
+            hi.representedObject = host.id
+            hi.state = (settings.terminalHost.id == host.id) ? .on : .off
             hostMenu.addItem(hi)
         }
         hostParent.submenu = hostMenu
@@ -118,8 +122,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func selectTerminalHost(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let host = TerminalHost(rawValue: raw) else { return }
+        guard let id = sender.representedObject as? String,
+              let host = TerminalHost.catalog.first(where: { $0.id == id }) else { return }
         EditorSettings.shared.terminalHost = host
     }
 }

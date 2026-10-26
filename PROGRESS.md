@@ -16,7 +16,7 @@ See `PLAN.md` for the full design and rationale.
 | **Phase 2** | Real indexing: live sweeper + content extraction | ✅ Done — bricks 1–6 of 6 (test suite landed) |
 | **Filter toolbar** | Broad layerable filters (kinds/tags/downloaded) + `downloaded_at` signal | ✅ Done — bricks A–C (on `main`) |
 | **Folders & zips** | Index directories (Desktop/Downloads/Documents) + `.zip` as first-class `folder`/`archive` kinds | ✅ Done (schema v7) |
-| **Open in Editor** | New `code` kind (source + config/markup now indexed) + ⌘E opens code/text/MD results in the user's editor (vim default; menu-bar "Default Editor") | ✅ Done — on `feature/open-in-editor` (pending merge) |
+| **Open in Editor** | New `code` kind (source + config/markup now indexed) + ⌘E opens code/text/MD results in the user's editor (vim default; menu-bar "Default Editor"); **configurable default terminal** (Terminal/iTerm/Ghostty/WezTerm/kitty) for terminal editors | ✅ Done — on `feature/open-in-editor` (pending merge) |
 | **Phase 2.5** | Deeper extraction: Vision OCR, office docs (docx/pages), RTF | ⬜ Planned |
 | **Polish** | Settings UI, onboarding + FDA flow, launchd, signing/notarization/DMG | ⬜ Planned |
 | ~~**Intelligence**~~ | ~~AFM `SearchIntent` + CoreML embeddings + two-stage query~~ | ❌ **Dropped** — pivoted away from Apple Intelligence (2026-10-19) |
@@ -113,6 +113,19 @@ the panel. Full design + the Devil's Advocate review in `EDITOR_PLAN.md`.
   its bundle ids resolves via LaunchServices (verified live: VS Code / Cursor / Xcode / TextEdit
   shown, Sublime / Zed hidden when absent). Terminal editors are always shown (not reliably
   probeable from an `LSUIElement` app); the active selection stays visible even if uninstalled.
+- **Configurable default terminal.** `TerminalHost` is now a curated catalog (same shape as
+  `EditorChoice`) — **Terminal.app · iTerm · Ghostty · WezTerm · kitty** — shown under
+  **Default Editor ▸ → Terminal App ▸** when a terminal editor is selected. The three GPU
+  terminals are install-filtered by bundle id (Terminal.app always shown; the active selection
+  stays visible even if removed); persisted by id in `UserDefaults` (`editor.terminalHost`,
+  Terminal.app fallback). Each host carries a **launch strategy**: Terminal.app/iTerm via the
+  existing AppleScript path (the only hosts that trigger the TCC Automation prompt); Ghostty/
+  WezTerm/kitty via `open -n <appURL> --args <prefix> sh -lc "<cmd>"`, app resolved by bundle id
+  (no PATH / no Automation prompt), nil resolution → `appNotFound` before `open`. The
+  `open --args` vector is built by a pure `EditorLauncher.cliArgs` (Ghostty `-e …`, kitty `…`,
+  WezTerm `start -- …`). **Verified:** app builds clean; the Ghostty recipe was confirmed live to
+  run the shell command (during the plan critique). WezTerm/kitty recipes + bundle ids are
+  plausible but **unverified on this machine** (apps absent) — on the manual checklist.
 - **Verified (daemon half) on a throwaway corpus:** `.py/.swift/.go/.json/.html/.css` index as
   `code` and are name-searchable via `mactl query`; `md/csv/txt/pdf` stay `document`, `png`
   image, unknown `.xyz` still skipped; `pending → 0` (no extraction loop). App compiles +
@@ -269,9 +282,6 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
 
 ### Feature backlog (unordered — pick next)
 - **Open-in-Editor follow-ons** (see `EDITOR_PLAN.md` §7):
-  - **Configurable terminal type.** Let the user point at a non-standard terminal
-    (Alacritty / kitty / WezTerm / Ghostty / …) via a custom terminal command or launch
-    template, rather than only the built-in Terminal.app / iTerm hosts.
   - **Hide uninstalled *terminal* editors.** GUI editors are already filtered by install state
     (bundle-id / LaunchServices resolution). Terminal commands remain hard to detect from the
     app — an `LSUIElement` process has a restricted PATH and the command only needs to exist in
@@ -325,9 +335,10 @@ would have forced is off the table. `PLAN.md` §4 still documents that design fo
   visible even if uninstalled (so its checkmark doesn't vanish). Terminal editors (vim/nvim/…)
   can't be reliably probed from an `LSUIElement` app (restricted PATH; the command only needs to
   exist in the terminal's shell), so they're always shown — detecting those is a follow-on.
-- **Terminal editors need Automation (Apple Events) permission.** The first ⌘E into a terminal
-  editor triggers a TCC prompt to control Terminal/iTerm; on denial the panel shows a
-  "Privacy › Automation" hint and nothing opens.
+- **AppleScript terminal hosts need Automation (Apple Events) permission.** A terminal editor
+  launched in **Terminal.app or iTerm** triggers a TCC prompt to control that app on first ⌘E; on
+  denial the panel shows a "Privacy › Automation" hint and nothing opens. The CLI hosts (Ghostty/
+  WezTerm/kitty) launch via `open` and need **no** Automation permission.
 - **Config/markup (`json`/`yaml`/`xml`/`html`/`css`/…) are `code`, not `document`** — by design,
   so they appear under the **Code** filter with the code icon, not under **Documents**.
 - **⌘E eligibility is text-only:** `kind==code` or a plain-text extension

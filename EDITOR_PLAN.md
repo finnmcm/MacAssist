@@ -98,15 +98,28 @@ extension → empty.
 - Curated **catalog** — terminal: vim, nvim, nano, emacs · GUI: VS Code, Cursor, Zed,
   Sublime Text, Xcode, TextEdit. (A free-text "Custom…" entry was built and then removed — see
   §7; the catalog covers the common editors.)
-- `terminalHost` preference (Terminal.app default; iTerm if installed).
+- `terminalHost` preference — also a **curated catalog** (`TerminalHost`, same shape as
+  `EditorChoice`): Terminal.app · iTerm · **Ghostty · WezTerm · kitty**. Install-filtered by
+  bundle id (Terminal.app always shown; the others only when resolved via LaunchServices), the
+  active selection kept visible even if uninstalled, persisted by id. Each host carries a
+  **launch strategy** — see §4 Brick 3.
 - Backed by `UserDefaults`; default = vim / Terminal.app.
 
 ### Brick 3 — launch engine (`EditorLauncher.swift`, new)
 - **GUI:** `NSWorkspace.shared.open([fileURL], withApplicationAt: appURL, …)` resolving the app
   by name/bundle id — reliable, no PATH dependency.
-- **Terminal:** AppleScript via `osascript`. Terminal.app:
-  `do script "cd <dir>; <cmd> <quoted path>"` then `activate`; iTerm variant. Careful
-  shell-quoting of the path.
+- **Terminal:** two launch strategies, chosen by the selected `TerminalHost`:
+  - **AppleScript hosts** (Terminal.app, iTerm) via `osascript`: Terminal.app
+    `do script "cd <dir>; <cmd> <quoted path>"` then `activate`; iTerm `write text` variant.
+    These are the **only** hosts that trip the TCC Automation prompt.
+  - **CLI hosts** (Ghostty/WezTerm/kitty): `open -n <appURL> --args <recipe>`, where the app URL
+    is resolved by bundle id (not PATH — an `LSUIElement` app's PATH is restricted) and the
+    recipe is the host's run-command prefix + `sh -lc "<shellCmd>"` so the one `cd <dir> && <cmd>
+    <path>` shell string is reused everywhere (Ghostty `-e …`, kitty `…`, WezTerm `start -- …`).
+    No AppleScript ⇒ **no Automation prompt**. A bundle id that no longer resolves → `appNotFound`
+    *before* `open` (its exit status only reflects the hand-off, so a missing terminal can't be
+    detected after). The arg-vector builder is a pure function (`EditorLauncher.cliArgs`).
+  Careful shell-quoting of the path in all cases.
 - **TCC:** the first terminal launch triggers an Automation (Apple Events) permission prompt;
   on denial, surface a clear `status` message rather than failing silently.
 - **Editor not installed:** a GUI editor whose app can't be resolved (NSWorkspace returns no
@@ -155,9 +168,11 @@ extension → empty.
 
 ## 7. Out of scope (candidate follow-ons)
 
-- **Configurable terminal type.** Support non-standard terminals (Alacritty / kitty / WezTerm /
-  Ghostty / …) via a user-supplied terminal command or launch template, instead of only the
-  built-in Terminal.app / iTerm hosts.
+- ✅ **Configurable terminal type — shipped.** The terminal host is now a curated catalog
+  (Terminal.app · iTerm · Ghostty · WezTerm · kitty), install-filtered by bundle id, with
+  per-host launch strategies (AppleScript vs `open -n … --args`). See §1 / §4 Brick 3.
+  (Alacritty is a trivial future catalog add.) A free-text custom launch template is still
+  deliberately out of scope, consistent with the removed custom-*editor* entry below.
 - **Hide uninstalled *terminal* editors.** GUI editors are already hidden when not installed
   (bundle-id / LaunchServices resolution; the active selection stays visible regardless).
   Terminal commands are harder to detect from the app — an `LSUIElement` process has a restricted

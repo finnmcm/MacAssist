@@ -65,29 +65,69 @@ extension EditorChoice {
     static let defaultChoice = catalog[0]  // vim
 }
 
-// The terminal application a terminal editor is launched inside. Terminal.app
-// is always present on macOS; iTerm is offered only when installed.
-enum TerminalHost: String, CaseIterable, Sendable {
-    case terminal
-    case iterm
+// The terminal a terminal editor is launched inside. Mirrors `EditorChoice`: a
+// curated catalog, install-filtered by bundle id (the active selection stays
+// visible even when uninstalled — see the menu in main.swift), persisted by id.
+// Terminal.app and iTerm are driven by AppleScript; the newer GPU terminals
+// (Ghostty/WezTerm/kitty) are launched via `open -n <app> --args <recipe>`,
+// which — unlike AppleScript — needs no TCC Automation permission.
+struct TerminalHost: Identifiable, Equatable, Sendable {
+    let id: String
+    let displayName: String
+    let bundleIds: [String]
+    let strategy: LaunchStrategy
 
-    var displayName: String {
-        switch self {
-        case .terminal: return "Terminal"
-        case .iterm:    return "iTerm"
-        }
+    // How EditorLauncher drives this terminal to run a shell command.
+    enum LaunchStrategy: Equatable, Sendable {
+        case appleScript(AppleScriptFlavor)  // osascript: Terminal.app / iTerm
+        case cli(prefix: [String])           // open -n <app> --args <prefix> sh -lc <cmd>
     }
 
-    var bundleId: String {
-        switch self {
-        case .terminal: return "com.apple.Terminal"
-        case .iterm:    return "com.googlecode.iterm2"
-        }
+    enum AppleScriptFlavor: Equatable, Sendable {
+        case terminal  // `do script`
+        case iterm     // `write text`
     }
 
+    // Offered in the menu only when installed (same LaunchServices probe as
+    // EditorChoice). An entry with no bundle ids is always shown.
     var isInstalled: Bool {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) != nil
+        if bundleIds.isEmpty { return true }
+        return appURL != nil
     }
+
+    // The resolved .app URL (first bundle id that resolves), or nil if none.
+    // The CLI launch path invokes `open -n <url>` (no PATH dependency) and uses
+    // nil to report "not installed" before launching — `open`'s exit status
+    // only reflects the hand-off, so a missing terminal can't be caught after.
+    var appURL: URL? {
+        for bundleId in bundleIds {
+            if let u = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+                return u
+            }
+        }
+        return nil
+    }
+}
+
+extension TerminalHost {
+    // Curated list shown in the "Terminal App ▸" menu. Order is the menu order.
+    static let catalog: [TerminalHost] = [
+        .init(id: "terminal", displayName: "Terminal", bundleIds: ["com.apple.Terminal"],
+              strategy: .appleScript(.terminal)),
+        .init(id: "iterm",    displayName: "iTerm",    bundleIds: ["com.googlecode.iterm2"],
+              strategy: .appleScript(.iterm)),
+        // CLI terminals. `prefix` is the host's "run this command" argument(s);
+        // the launcher appends `sh -lc <shellCmd>` so every host reuses one
+        // shell string (see EditorLauncher.cliArgs).
+        .init(id: "ghostty",  displayName: "Ghostty",  bundleIds: ["com.mitchellh.ghostty"],
+              strategy: .cli(prefix: ["-e"])),
+        .init(id: "wezterm",  displayName: "WezTerm",  bundleIds: ["com.github.wez.wezterm"],
+              strategy: .cli(prefix: ["start", "--"])),
+        .init(id: "kitty",    displayName: "kitty",    bundleIds: ["net.kovidgoyal.kitty"],
+              strategy: .cli(prefix: [])),
+    ]
+
+    static let defaultHost = catalog[0]  // Terminal.app
 }
 
 @MainActor
@@ -117,9 +157,14 @@ final class EditorSettings {
         set { defaults.set(newValue, forKey: Key.selectedId) }
     }
 
+    // Stored by id. An unknown id (stale value, or a host removed from the
+    // catalog) resolves to Terminal.app, which always exists.
     var terminalHost: TerminalHost {
-        get { TerminalHost(rawValue: defaults.string(forKey: Key.terminalHost) ?? "") ?? .terminal }
-        set { defaults.set(newValue.rawValue, forKey: Key.terminalHost) }
+        get {
+            let id = defaults.string(forKey: Key.terminalHost) ?? TerminalHost.defaultHost.id
+            return TerminalHost.catalog.first { $0.id == id } ?? TerminalHost.defaultHost
+        }
+        set { defaults.set(newValue.id, forKey: Key.terminalHost) }
     }
 
     // MARK: - resolved choice

@@ -74,12 +74,23 @@ enum EditorLauncher {
     private static func launchTerminal(path: String, command: String,
                                        host: TerminalHost) -> Result<Void, LaunchError> {
         let dir = (path as NSString).deletingLastPathComponent
-        // Runs in the user's shell via `do script` / `write text`. The command
-        // is left unquoted (a custom entry may carry flags, e.g. "code -w");
-        // only the cd target and the path are shell-quoted.
+        // One shell string reused by every host; only the cd target and the
+        // path are shell-quoted (the editor command is a bare word, e.g. "vim").
         let shellCmd = "cd \(shellQuote(dir)) && \(command) \(shellQuote(path))"
-        let script = (host == .iterm) ? itermScript(shellCmd) : terminalScript(shellCmd)
+        switch host.strategy {
+        case .appleScript(let flavor):
+            return launchAppleScript(shellCmd: shellCmd, flavor: flavor, host: host)
+        case .cli(let prefix):
+            return launchCLI(shellCmd: shellCmd, prefix: prefix, host: host)
+        }
+    }
 
+    // Terminal.app / iTerm: drive via osascript. These are the only hosts that
+    // trip the TCC Automation (Apple Events) permission prompt.
+    private static func launchAppleScript(shellCmd: String,
+                                          flavor: TerminalHost.AppleScriptFlavor,
+                                          host: TerminalHost) -> Result<Void, LaunchError> {
+        let script = (flavor == .iterm) ? itermScript(shellCmd) : terminalScript(shellCmd)
         let r = run("/usr/bin/osascript", ["-e", script])
         if r.status == 0 { return .success(()) }
         // errAEEventNotPermitted (-1743) / "not authorized" ⇒ the user denied
@@ -91,6 +102,32 @@ enum EditorLauncher {
             return .failure(.automationDenied(host: host.displayName))
         }
         return .failure(.launchFailed(detail: e))
+    }
+
+    // Ghostty / WezTerm / kitty: `open -n <app> --args <recipe>`. The app is
+    // resolved by bundle id (not PATH — an LSUIElement app has a restricted one)
+    // and the nil check is the install guard: `open`'s exit status only reflects
+    // the hand-off, so a missing terminal can't be detected from it afterward.
+    // No AppleScript ⇒ no Automation prompt.
+    private static func launchCLI(shellCmd: String, prefix: [String],
+                                  host: TerminalHost) -> Result<Void, LaunchError> {
+        guard let appURL = host.appURL else {
+            return .failure(.appNotFound(editor: host.displayName))
+        }
+        let args = ["-n", appURL.path, "--args"] + cliArgs(prefix: prefix, shellCmd: shellCmd)
+        let r = run("/usr/bin/open", args)
+        if r.status == 0 { return .success(()) }
+        return .failure(.launchFailed(detail: r.stderr))
+    }
+
+    // The `open --args` vector for a CLI terminal: the host's run-command prefix
+    // followed by `sh -lc <shellCmd>`, so one shell string works everywhere.
+    // Pure (no I/O) so it is checkable against the expected arrays:
+    //   Ghostty → ["-e", "sh", "-lc", shellCmd]
+    //   kitty   → ["sh", "-lc", shellCmd]
+    //   WezTerm → ["start", "--", "sh", "-lc", shellCmd]
+    static func cliArgs(prefix: [String], shellCmd: String) -> [String] {
+        prefix + ["sh", "-lc", shellCmd]
     }
 
     private static func terminalScript(_ shellCmd: String) -> String {
