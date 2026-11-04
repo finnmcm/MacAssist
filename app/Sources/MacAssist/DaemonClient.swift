@@ -45,15 +45,45 @@ struct DaemonClient {
     // MARK: - connection
 
     private func roundTrip(_ payload: Data) throws -> Data {
+        let fd = try connectWithRetry()
+        defer { close(fd) }
+        try writeFrame(fd, payload)
+        return try readFrame(fd)
+    }
+
+    // Open and connect a socket to the daemon. The launchd agent is bootstrapped
+    // as the app launches (DaemonInstaller), so on a cold start the daemon may
+    // still be opening the DB / binding the socket when the first query fires.
+    // Retry a handful of times on the "not up yet" errnos (ENOENT: socket file
+    // not created; ECONNREFUSED: nothing listening yet) before giving up. Other
+    // failures surface immediately.
+    private func connectWithRetry() throws -> Int32 {
+        let maxAttempts = 15          // ~2.25s worst case; a warm daemon hits on #1
+        let retryDelay: useconds_t = 150_000  // 150ms
+        var lastError = ""
+        for attempt in 0..<maxAttempts {
+            do {
+                return try openConnection()
+            } catch ClientError.connect(let msg) {
+                lastError = msg
+                let transient = (errno == ENOENT || errno == ECONNREFUSED)
+                if !transient || attempt == maxAttempts - 1 { break }
+                usleep(retryDelay)
+            }
+        }
+        throw ClientError.connect(lastError)
+    }
+
+    private func openConnection() throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ClientError.connect(errnoString()) }
-        defer { close(fd) }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = socketPath.utf8CString
         let capacity = MemoryLayout.size(ofValue: addr.sun_path)
         guard pathBytes.count <= capacity else {
+            close(fd)
             throw ClientError.connect("socket path too long")
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { raw in
@@ -68,10 +98,14 @@ struct DaemonClient {
                 connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard rc == 0 else { throw ClientError.connect(errnoString()) }
-
-        try writeFrame(fd, payload)
-        return try readFrame(fd)
+        guard rc == 0 else {
+            let connectErrno = errno       // pin before close() can clobber it
+            let err = errnoString()        // reads errno == connectErrno here
+            close(fd)
+            errno = connectErrno           // so connectWithRetry sees the real cause
+            throw ClientError.connect(err)
+        }
+        return fd
     }
 
     private func writeFrame(_ fd: Int32, _ payload: Data) throws {

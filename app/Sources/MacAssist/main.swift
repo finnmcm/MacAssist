@@ -15,6 +15,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let editorSubmenu = NSMenu()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Install (or refresh) and start the background daemon as a launchd
+        // agent before anything tries to reach its socket. No-op in a dev build
+        // where the daemon isn't bundled. See DaemonInstaller / PLAN.md §8.
+        DaemonInstaller.ensureInstalled()
+
         panel = PanelController(model: model)
 
         hotKey = HotKey { [weak self] in self?.panel?.toggle() }

@@ -1,4 +1,6 @@
 build/
+build-release/
+dist/
 .cache/
 .DS_Store
 compile_commands.json
