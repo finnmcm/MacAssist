@@ -1,0 +1,38 @@
+name: Release
+
+# Build the signed .app and publish a GitHub release whenever a v* tag is
+# pushed. Runs on an Apple Silicon runner so the daemon is built arm64 natively
+# (no Rosetta/cmake arch surprise) and the system codesign is used.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # create the release + upload assets
+
+jobs:
+  release:
+    runs-on: macos-14  # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release artifacts
+        # Tag v0.1 → version 0.1; produces dist/MacAssist-<version>.{zip,dmg}.
+        run: ./scripts/make-release.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Create the release if it doesn't exist yet, otherwise just attach the
+        # freshly-built artifacts to the existing one (idempotent re-runs).
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              dist/MacAssist-*.dmg dist/MacAssist-*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              dist/MacAssist-*.dmg dist/MacAssist-*.zip \
+              --title "MacAssist $GITHUB_REF_NAME" \
+              --generate-notes
+          fi
